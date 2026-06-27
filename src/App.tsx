@@ -1,0 +1,923 @@
+import { useEffect, useMemo, useState } from 'react'
+import type { FormEvent, ReactNode } from 'react'
+import {
+  AlertTriangle,
+  Bell,
+  Boxes,
+  Building2,
+  CalendarClock,
+  ChevronLeft,
+  CircleDollarSign,
+  ClipboardList,
+  Download,
+  Edit3,
+  Eye,
+  FileBarChart,
+  FileText,
+  Home,
+  History,
+  IndianRupee,
+  LayoutDashboard,
+  LogOut,
+  Menu,
+  MessageCircle,
+  PackagePlus,
+  Plus,
+  Printer,
+  ReceiptText,
+  Search,
+  Settings,
+  ShieldCheck,
+  Trash2,
+  UserPlus,
+  Users,
+  Wrench,
+  X,
+} from 'lucide-react'
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Legend,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
+
+type Role = 'Admin' | 'Staff'
+type Page =
+  | 'Dashboard'
+  | 'Tenants'
+  | 'Rooms'
+  | 'Payments'
+  | 'Finance'
+  | 'Inventory'
+  | 'Maintenance'
+  | 'Reports'
+  | 'Settings'
+type RoomType = 'Single' | 'Double' | 'Triple' | 'Suite' | 'Custom'
+type RoomStatus = 'Occupied' | 'Vacant' | 'Maintenance'
+type PaymentStatus = 'Paid' | 'Pending' | 'Overdue'
+type TenantStatus = 'Active' | 'Notice' | 'Left'
+type EntryType = 'Credit' | 'Debit'
+type InventoryCategory = 'Furniture' | 'Linen' | 'Kitchen' | 'Electrical' | 'Housekeeping'
+type ExpenseCategory =
+  | 'Grocery'
+  | 'Vegetables'
+  | 'Gas Cylinder'
+  | 'Staff Salary'
+  | 'Miscellaneous'
+  | 'Inventory'
+  | 'Maintenance'
+type TicketStatus = 'Open' | 'In Progress' | 'Resolved'
+
+type Branch = { id: string; name: string; address: string; active?: boolean; floors?: number; notes?: string; contact?: string }
+type User = { id: string; name: string; role: Role; branchIds: string[]; permissions: string[]; phone?: string; email?: string; username?: string; password?: string; active?: boolean }
+type Room = {
+  id: string
+  branchId: string
+  number: string
+  floor: number
+  type: RoomType
+  beds: number
+  rent: number
+  electricity: 'Included' | 'Fixed'
+  electricityAmount: number
+  status: RoomStatus
+  notes?: string
+}
+type Tenant = {
+  id: string
+  branchId: string
+  name: string
+  phone: string
+  email: string
+  roomId: string
+  bedNo: number
+  monthlyRent: number
+  security: number
+  electricity: 'Included' | 'Fixed'
+  electricityAmount: number
+  joiningDate: string
+  status: TenantStatus
+  idProof: string
+  paidThisMonth: number
+  dueDate: string
+  notice?: { noticeDate: string; expectedLeavingDate: string; reason: string }
+  left?: {
+    leftDate: string
+    reason: string
+    finalRentBalance: number
+    electricityBalance: number
+    maintenanceDeduction: number
+    securityRefund: number
+    finalSettlement: number
+  }
+}
+type Payment = {
+  id: string
+  branchId: string
+  tenantId: string
+  amount: number
+  date: string
+  month: string
+  status: 'Received' | 'Partial'
+  invoiceId: string
+}
+type CashbookEntry = {
+  id: string
+  branchId: string
+  type: EntryType
+  amount: number
+  description: string
+  date: string
+  source: 'Manual' | 'Payment' | 'Expense' | 'Inventory' | 'Maintenance'
+  linkedId?: string
+}
+type Expense = {
+  id: string
+  branchId: string
+  category: ExpenseCategory
+  description: string
+  amount: number
+  date: string
+  vendor?: string
+}
+type InventoryItem = {
+  id: string
+  branchId: string
+  name: string
+  category: InventoryCategory
+  stock: number
+  unit: string
+  reorderAt: number
+  lastPurchase: string
+}
+type InventoryPurchase = {
+  id: string
+  branchId: string
+  itemId: string
+  quantity: number
+  unitCost: number
+  date: string
+  note: string
+  expenseId?: string
+  cashbookId?: string
+}
+type MaintenanceTicket = {
+  id: string
+  branchId: string
+  title: string
+  status: TicketStatus
+  roomId: string
+  tenantId?: string
+  category: string
+  priority: 'Low' | 'Medium' | 'High'
+  raisedDate: string
+  assignedTo: string
+  description: string
+  resolution?: { date: string; note: string; cost: number; vendor: string }
+}
+type Invoice = {
+  id: string
+  branchId: string
+  tenantId: string
+  number: string
+  period: string
+  createdAt: string
+}
+type ActivityLog = {
+  id: string
+  branchId: string
+  userId: string
+  action: string
+  entity: string
+  at: string
+  oldValue: string
+  newValue: string
+  role: Role
+  branchName: string
+  module: string
+  actionType: string
+  description: string
+  metadata?: Record<string, string | number>
+}
+type AppData = {
+  branches: Branch[]
+  users: User[]
+  tenants: Tenant[]
+  rooms: Room[]
+  payments: Payment[]
+  cashbook: CashbookEntry[]
+  expenses: Expense[]
+  inventory: InventoryItem[]
+  purchases: InventoryPurchase[]
+  tickets: MaintenanceTicket[]
+  invoices: Invoice[]
+  activityLogs: ActivityLog[]
+}
+
+const today = '2026-06-27'
+const currentMonth = '2026-06'
+const money = (value: number) => `₹${value.toLocaleString('en-IN')}`
+const formatDate = (value?: string) => value ? value.slice(0, 10).split('-').reverse().join('/') : '-'
+const formatDateTime = (value: string) => new Intl.DateTimeFormat('en-GB', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value))
+const uid = (prefix: string) => `${prefix}-${Math.random().toString(36).slice(2, 8)}`
+const daysUntil = (date: string) =>
+  Math.ceil((new Date(`${date}T00:00:00`).getTime() - new Date(`${today}T00:00:00`).getTime()) / 86400000)
+
+function logActivity(data: AppData, input: { userName: string; userId: string; userRole: Role; branchId: string; branchName: string; module: string; actionType: string; description: string; metadata?: Record<string, string | number> }): AppData {
+  const log: ActivityLog = {
+    id: uid('log'), branchId: input.branchId, branchName: input.branchName, userId: input.userId, role: input.userRole,
+    action: input.actionType, entity: input.module, module: input.module, actionType: input.actionType,
+    description: input.description, metadata: input.metadata, at: new Date().toISOString(), oldValue: '', newValue: '',
+  }
+  return { ...data, activityLogs: [log, ...data.activityLogs] }
+}
+
+const initialData: AppData = {
+  branches: [
+    { id: 'b1', name: 'PG 95 - Sector 45', address: 'Plot 95, Sector 45, Gurugram' },
+    { id: 'b2', name: 'PG 95 - Cyber City', address: 'DLF Phase 2, Gurugram' },
+    { id: 'b3', name: 'PG 95 - Noida 62', address: 'Block C, Sector 62, Noida' },
+  ],
+  users: [
+    { id: 'u1', name: 'Aarav Admin', role: 'Admin', branchIds: ['b1', 'b2', 'b3'], permissions: ['all'], active: true },
+    { id: 'u2', name: 'Maya Staff', role: 'Staff', branchIds: ['b1'], permissions: ['admit_tenant', 'add_payment', 'move_tenant', 'vacate_tenant', 'add_cashbook', 'add_expense', 'add_inventory', 'create_maintenance', 'resolve_maintenance', 'view_reports'], phone: '9876509999', email: '', username: 'maya.staff', active: true },
+  ],
+  rooms: [
+    { id: 'r101', branchId: 'b1', number: '101', floor: 1, type: 'Single', beds: 1, rent: 15000, electricity: 'Included', electricityAmount: 0, status: 'Occupied' },
+    { id: 'r102', branchId: 'b1', number: '102', floor: 1, type: 'Double', beds: 2, rent: 11000, electricity: 'Fixed', electricityAmount: 900, status: 'Occupied' },
+    { id: 'r201', branchId: 'b1', number: '201', floor: 2, type: 'Triple', beds: 3, rent: 9000, electricity: 'Fixed', electricityAmount: 700, status: 'Occupied' },
+    { id: 'r202', branchId: 'b1', number: '202', floor: 2, type: 'Suite', beds: 1, rent: 22000, electricity: 'Included', electricityAmount: 0, status: 'Vacant' },
+    { id: 'r301', branchId: 'b1', number: '301', floor: 3, type: 'Double', beds: 2, rent: 12500, electricity: 'Fixed', electricityAmount: 800, status: 'Maintenance' },
+    { id: 'r401', branchId: 'b2', number: '401', floor: 1, type: 'Single', beds: 1, rent: 18000, electricity: 'Included', electricityAmount: 0, status: 'Occupied' },
+    { id: 'r402', branchId: 'b2', number: '402', floor: 1, type: 'Double', beds: 2, rent: 13000, electricity: 'Fixed', electricityAmount: 1000, status: 'Vacant' },
+    { id: 'r501', branchId: 'b3', number: '501', floor: 1, type: 'Triple', beds: 3, rent: 8500, electricity: 'Fixed', electricityAmount: 600, status: 'Occupied' },
+  ],
+  tenants: [
+    { id: 't1', branchId: 'b1', name: 'Riya Sharma', phone: '9876543210', email: 'riya@mail.com', roomId: 'r101', bedNo: 1, monthlyRent: 15000, security: 15000, electricity: 'Included', electricityAmount: 0, joiningDate: '2025-11-08', status: 'Active', idProof: 'aadhaar-riya.pdf', paidThisMonth: 15000, dueDate: '2026-06-30' },
+    { id: 't2', branchId: 'b1', name: 'Neha Verma', phone: '9876500011', email: 'neha@mail.com', roomId: 'r102', bedNo: 1, monthlyRent: 11000, security: 11000, electricity: 'Fixed', electricityAmount: 900, joiningDate: '2026-01-12', status: 'Notice', idProof: 'pan-neha.jpg', paidThisMonth: 5000, dueDate: '2026-06-24', notice: { noticeDate: '2026-06-10', expectedLeavingDate: '2026-06-30', reason: 'Office relocation' } },
+    { id: 't3', branchId: 'b1', name: 'Kavya Rao', phone: '9876500022', email: 'kavya@mail.com', roomId: 'r102', bedNo: 2, monthlyRent: 11000, security: 11000, electricity: 'Fixed', electricityAmount: 900, joiningDate: '2026-02-01', status: 'Active', idProof: 'aadhaar-kavya.pdf', paidThisMonth: 0, dueDate: '2026-06-27' },
+    { id: 't4', branchId: 'b1', name: 'Ananya Iyer', phone: '9876500033', email: 'ananya@mail.com', roomId: 'r201', bedNo: 1, monthlyRent: 9000, security: 9000, electricity: 'Fixed', electricityAmount: 700, joiningDate: '2026-03-15', status: 'Active', idProof: 'dl-ananya.pdf', paidThisMonth: 9000, dueDate: '2026-07-01' },
+    { id: 't5', branchId: 'b1', name: 'Pooja Singh', phone: '9876500044', email: 'pooja@mail.com', roomId: 'r201', bedNo: 2, monthlyRent: 9000, security: 9000, electricity: 'Fixed', electricityAmount: 700, joiningDate: '2025-09-03', status: 'Left', idProof: 'aadhaar-pooja.pdf', paidThisMonth: 9000, dueDate: '2026-05-25', left: { leftDate: '2026-06-02', reason: 'Completed internship', finalRentBalance: 0, electricityBalance: 300, maintenanceDeduction: 500, securityRefund: 8200, finalSettlement: 8200 } },
+    { id: 't6', branchId: 'b2', name: 'Meera Khan', phone: '9988776611', email: 'meera@mail.com', roomId: 'r401', bedNo: 1, monthlyRent: 18000, security: 18000, electricity: 'Included', electricityAmount: 0, joiningDate: '2026-04-01', status: 'Active', idProof: 'aadhaar-meera.pdf', paidThisMonth: 18000, dueDate: '2026-07-01' },
+    { id: 't7', branchId: 'b3', name: 'Tara Bose', phone: '9988776622', email: 'tara@mail.com', roomId: 'r501', bedNo: 1, monthlyRent: 8500, security: 8500, electricity: 'Fixed', electricityAmount: 600, joiningDate: '2026-05-05', status: 'Active', idProof: 'aadhaar-tara.pdf', paidThisMonth: 4000, dueDate: '2026-06-20' },
+  ],
+  payments: [
+    { id: 'p1', branchId: 'b1', tenantId: 't1', amount: 15000, date: '2026-06-03', month: currentMonth, status: 'Received', invoiceId: 'i1' },
+    { id: 'p2', branchId: 'b1', tenantId: 't2', amount: 5000, date: '2026-06-09', month: currentMonth, status: 'Partial', invoiceId: 'i2' },
+    { id: 'p3', branchId: 'b1', tenantId: 't4', amount: 9000, date: '2026-06-06', month: currentMonth, status: 'Received', invoiceId: 'i3' },
+    { id: 'p4', branchId: 'b2', tenantId: 't6', amount: 18000, date: '2026-06-03', month: currentMonth, status: 'Received', invoiceId: 'i4' },
+  ],
+  cashbook: [
+    { id: 'c1', branchId: 'b1', type: 'Credit', amount: 15000, description: 'Rent received - Riya Sharma', date: '2026-06-03', source: 'Payment' },
+    { id: 'c2', branchId: 'b1', type: 'Credit', amount: 5000, description: 'Partial rent - Neha Verma', date: '2026-06-09', source: 'Payment' },
+    { id: 'c3', branchId: 'b1', type: 'Credit', amount: 9000, description: 'Rent received - Ananya Iyer', date: '2026-06-06', source: 'Payment' },
+    { id: 'c4', branchId: 'b1', type: 'Debit', amount: 7800, description: 'Grocery purchase', date: '2026-06-08', source: 'Expense' },
+    { id: 'c5', branchId: 'b2', type: 'Credit', amount: 18000, description: 'Rent received - Meera Khan', date: '2026-06-03', source: 'Payment' },
+  ],
+  expenses: [
+    { id: 'e1', branchId: 'b1', category: 'Grocery', description: 'Monthly pantry refill', amount: 7800, date: '2026-06-08', vendor: 'Metro Cash' },
+  ],
+  inventory: [
+    { id: 'iv1', branchId: 'b1', name: 'Mattress', category: 'Furniture', stock: 4, unit: 'pcs', reorderAt: 3, lastPurchase: '2026-05-12' },
+    { id: 'iv2', branchId: 'b1', name: 'Bed Sheet', category: 'Linen', stock: 8, unit: 'pcs', reorderAt: 10, lastPurchase: '2026-06-02' },
+    { id: 'iv3', branchId: 'b1', name: 'LED Bulb', category: 'Electrical', stock: 12, unit: 'pcs', reorderAt: 8, lastPurchase: '2026-06-05' },
+    { id: 'iv4', branchId: 'b2', name: 'Dinner Plate', category: 'Kitchen', stock: 16, unit: 'pcs', reorderAt: 12, lastPurchase: '2026-05-20' },
+  ],
+  purchases: [],
+  tickets: [
+    { id: 'm1', branchId: 'b1', title: 'AC not cooling', status: 'Open', roomId: 'r102', tenantId: 't2', category: 'Electrical', priority: 'High', raisedDate: '2026-06-25', assignedTo: 'CoolCare Vendor', description: 'AC service required before month end.' },
+    { id: 'm2', branchId: 'b1', title: 'Bathroom tap leakage', status: 'In Progress', roomId: 'r301', category: 'Plumbing', priority: 'Medium', raisedDate: '2026-06-22', assignedTo: 'Ramesh Plumber', description: 'Room marked under maintenance.' },
+  ],
+  invoices: [
+    { id: 'i1', branchId: 'b1', tenantId: 't1', number: 'PG95-202606-001', period: 'June 2026', createdAt: '2026-06-03' },
+    { id: 'i2', branchId: 'b1', tenantId: 't2', number: 'PG95-202606-002', period: 'June 2026', createdAt: '2026-06-09' },
+    { id: 'i3', branchId: 'b1', tenantId: 't4', number: 'PG95-202606-003', period: 'June 2026', createdAt: '2026-06-06' },
+    { id: 'i4', branchId: 'b2', tenantId: 't6', number: 'PG95-202606-004', period: 'June 2026', createdAt: '2026-06-03' },
+  ],
+  activityLogs: [],
+}
+
+function getTenantDue(tenant: Tenant) {
+  return tenant.monthlyRent + (tenant.electricity === 'Fixed' ? tenant.electricityAmount : 0)
+}
+
+function getPaymentStatus(tenant: Tenant): PaymentStatus {
+  const balance = Math.max(0, getTenantDue(tenant) - tenant.paidThisMonth)
+  if (balance === 0) return 'Paid'
+  return daysUntil(tenant.dueDate) < 0 ? 'Overdue' : 'Pending'
+}
+
+function branchData(data: AppData, branchId: string) {
+  const activeTenants = data.tenants.filter((tenant) => tenant.branchId === branchId && tenant.status !== 'Left')
+  const leftTenants = data.tenants.filter((tenant) => tenant.branchId === branchId && tenant.status === 'Left')
+  const rooms = data.rooms.filter((room) => room.branchId === branchId)
+  const payments = data.payments.filter((payment) => payment.branchId === branchId)
+  const cashbook = data.cashbook.filter((entry) => entry.branchId === branchId).sort((a, b) => a.date.localeCompare(b.date))
+  const expenses = data.expenses.filter((expense) => expense.branchId === branchId)
+  const inventory = data.inventory.filter((item) => item.branchId === branchId)
+  const purchases = data.purchases.filter((purchase) => purchase.branchId === branchId)
+  const tickets = data.tickets.filter((ticket) => ticket.branchId === branchId)
+  const occupiedBeds = activeTenants.length
+  const totalBeds = rooms.reduce((sum, room) => sum + room.beds, 0)
+  const revenue = cashbook.filter((entry) => entry.type === 'Credit' && entry.date.startsWith(currentMonth)).reduce((sum, entry) => sum + entry.amount, 0)
+  const expensesTotal = cashbook.filter((entry) => entry.type === 'Debit' && entry.date.startsWith(currentMonth)).reduce((sum, entry) => sum + entry.amount, 0)
+  const expected = activeTenants.reduce((sum, tenant) => sum + getTenantDue(tenant), 0)
+  const overdue = activeTenants.reduce((sum, tenant) => getPaymentStatus(tenant) === 'Overdue' ? sum + Math.max(0, getTenantDue(tenant) - tenant.paidThisMonth) : sum, 0)
+  const pending = activeTenants.reduce((sum, tenant) => sum + Math.max(0, getTenantDue(tenant) - tenant.paidThisMonth), 0)
+  const openTickets = tickets.filter((ticket) => ticket.status !== 'Resolved')
+
+  return {
+    activeTenants,
+    leftTenants,
+    rooms,
+    payments,
+    cashbook,
+    expenses,
+    inventory,
+    purchases,
+    tickets,
+    occupiedBeds,
+    totalBeds,
+    occupancyRate: totalBeds ? Math.round((occupiedBeds / totalBeds) * 100) : 0,
+    revenue,
+    expensesTotal,
+    net: revenue - expensesTotal,
+    expected,
+    overdue,
+    pending,
+    openTickets,
+  }
+}
+
+function Button({ children, onClick, tone = 'blue', type = 'button', disabled = false }: { children: ReactNode; onClick?: () => void; tone?: 'blue' | 'green' | 'dark' | 'red' | 'soft'; type?: 'button' | 'submit'; disabled?: boolean }) {
+  const tones = {
+    blue: 'bg-blue-600 text-white hover:bg-blue-700',
+    green: 'bg-emerald-600 text-white hover:bg-emerald-700',
+    dark: 'bg-slate-900 text-white hover:bg-slate-800',
+    red: 'bg-rose-600 text-white hover:bg-rose-700',
+    soft: 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50',
+  }
+  return <button disabled={disabled} type={type} onClick={onClick} className={`inline-flex min-h-10 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-semibold shadow-sm transition disabled:cursor-not-allowed disabled:opacity-50 ${tones[tone]}`}>{children}</button>
+}
+
+function CompactAction({ children, title, onClick, disabled = false, danger = false }: { children: ReactNode; title: string; onClick?: () => void; disabled?: boolean; danger?: boolean }) {
+  return <button type="button" title={title} aria-label={title} disabled={disabled} onClick={onClick} className={`grid h-8 w-8 place-items-center rounded-md border transition disabled:cursor-not-allowed disabled:opacity-35 ${danger ? 'border-rose-200 text-rose-600 hover:bg-rose-50' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>{children}</button>
+}
+
+function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
+  return <section className={`rounded-lg border border-slate-200 bg-white p-4 shadow-sm ${className}`}>{children}</section>
+}
+
+function Badge({ children, tone = 'slate' }: { children: ReactNode; tone?: 'green' | 'red' | 'orange' | 'blue' | 'slate' }) {
+  const tones = {
+    green: 'bg-emerald-100 text-emerald-700',
+    red: 'bg-rose-100 text-rose-700',
+    orange: 'bg-orange-100 text-orange-700',
+    blue: 'bg-blue-100 text-blue-700',
+    slate: 'bg-slate-100 text-slate-700',
+  }
+  return <span className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${tones[tone]}`}>{children}</span>
+}
+
+function Modal({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/35 p-4 backdrop-blur-sm">
+      <div className="max-h-[92vh] w-full max-w-2xl overflow-auto rounded-lg bg-white p-5 shadow-2xl">
+        <div className="mb-4 flex items-center justify-between gap-4">
+          <h2 className="text-xl font-bold text-slate-900">{title}</h2>
+          <button aria-label="Close modal" onClick={onClose} className="rounded-md p-2 text-slate-500 hover:bg-slate-100"><X size={20} /></button>
+        </div>
+        {children}
+      </div>
+    </div>
+  )
+}
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return <label className="grid gap-1 text-sm font-semibold text-slate-700">{label}{children}</label>
+}
+
+const inputClass = 'min-h-10 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100'
+
+function App() {
+  const [data, setData] = useState<AppData>(initialData)
+  const [branchId, setBranchId] = useState<string>('')
+  const [page, setPage] = useState<Page>('Dashboard')
+  const [role, setRole] = useState<Role>('Admin')
+  const [query, setQuery] = useState('')
+  const [modal, setModal] = useState<string>('')
+  const [mobileNav, setMobileNav] = useState(false)
+  const [selectedTenantId, setSelectedTenantId] = useState('')
+  const [selectedRoomId, setSelectedRoomId] = useState('')
+  const [selectedCashbookId, setSelectedCashbookId] = useState('')
+  const [selectedInventoryId, setSelectedInventoryId] = useState('')
+  const [selectedUserId, setSelectedUserId] = useState('')
+  const [selectedTicketId, setSelectedTicketId] = useState('')
+  const [financeTab, setFinanceTab] = useState('Cashbook')
+  const [tenantTab, setTenantTab] = useState<'Active' | 'Left PG'>('Active')
+  const [tenantFilter, setTenantFilter] = useState('All')
+  const [roomFloor, setRoomFloor] = useState('All Floors')
+  const [paymentFilter, setPaymentFilter] = useState('All')
+  const [inventoryFilter, setInventoryFilter] = useState('All')
+  const [ticketFilter, setTicketFilter] = useState('All')
+  const [reportRange, setReportRange] = useState('Monthly Summary')
+  const currentUser = data.users.find((user) => user.role === role)!
+  const branch = data.branches.find((item) => item.id === branchId)
+  const scoped = useMemo(() => branchId ? branchData(data, branchId) : undefined, [data, branchId])
+  const isAdmin = role === 'Admin'
+  const can = (permission: string) => isAdmin || currentUser.permissions.includes(permission)
+  const visibleBranches = data.branches.filter((item) => item.active !== false && (isAdmin || currentUser.branchIds.includes(item.id)))
+
+  useEffect(() => {
+    if (branchId && !isAdmin && !currentUser.branchIds.includes(branchId)) setBranchId('')
+  }, [branchId, currentUser.branchIds, isAdmin])
+
+  const refreshRoomStatuses = (next: AppData): AppData => ({
+    ...next,
+    rooms: next.rooms.map((room) => {
+      if (room.status === 'Maintenance') return room
+      const activeCount = next.tenants.filter((tenant) => tenant.roomId === room.id && tenant.status !== 'Left').length
+      return { ...room, status: activeCount >= room.beds ? 'Occupied' : 'Vacant' }
+    }),
+  })
+
+  const updateData = (updater: (previous: AppData) => AppData, action: string, entity: string, description?: string, metadata?: Record<string, string | number>) => {
+    if (!isAdmin && /^(edit|delete)/i.test(action)) return
+    setData((previous) => {
+      const next = refreshRoomStatuses(updater(previous))
+      return logActivity(next, { userName: currentUser.name, userId: currentUser.id, userRole: role, branchId, branchName: branch?.name || '', module: entity, actionType: action, description: description || `${currentUser.role} ${currentUser.name} performed ${action.toLowerCase()} in ${entity}.`, metadata })
+    })
+  }
+
+  if (!branchId) {
+    return (
+      <main className="min-h-screen bg-[#f7f3ec] px-4 py-10">
+        <div className="mx-auto max-w-6xl">
+          <div className="mb-8 text-center">
+            <h1 className="text-4xl font-black text-slate-950">PG Admin Portal</h1>
+            <p className="mt-2 text-lg text-slate-600">Select a branch to continue</p>
+            <div className="mt-4 flex justify-center gap-2"><button onClick={() => setRole(role === 'Admin' ? 'Staff' : 'Admin')} className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-bold"><ShieldCheck className="mr-1 inline" size={16} /> {role}</button>{isAdmin && <Button tone="blue" onClick={() => setModal('addBranch')}><Plus size={16} /> Add Branch</Button>}</div>
+          </div>
+          <div className="grid gap-4 md:grid-cols-3">
+            {visibleBranches.map((item) => {
+              const stats = branchData(data, item.id)
+              return (
+                <button key={item.id} onClick={() => { setBranchId(item.id); setPage('Dashboard') }} className="rounded-lg border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-blue-400 hover:shadow-md">
+                  <Building2 className="mb-4 text-blue-600" size={30} />
+                  <h2 className="text-xl font-bold text-slate-950">{item.name}</h2>
+                  <p className="mt-1 min-h-12 text-sm text-slate-500">{item.address}</p>
+                  <div className="mt-4 grid grid-cols-2 gap-3">
+                    <div className="rounded-md bg-slate-50 p-3"><p className="text-xs text-slate-500">Total tenants</p><p className="text-2xl font-bold">{stats.activeTenants.length}</p></div>
+                    <div className="rounded-md bg-slate-50 p-3"><p className="text-xs text-slate-500">Total rooms</p><p className="text-2xl font-bold">{stats.rooms.length}</p></div>
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+          {isAdmin && data.branches.some((item) => item.active === false) && <p className="mt-6 text-center text-sm text-slate-500">Deactivated branches can be restored from Settings.</p>}
+        </div>
+        {modal === 'addBranch' && <CreateBranchModal onClose={() => setModal('')} onSubmit={(nextBranch) => { const id = uid('b'); setData((previous) => logActivity({ ...previous, branches: [...previous.branches, { id, active: true, ...nextBranch }], users: previous.users.map((user) => user.role === 'Admin' ? { ...user, branchIds: [...user.branchIds, id] } : user) }, { userName: currentUser.name, userId: currentUser.id, userRole: role, branchId: id, branchName: nextBranch.name, module: 'Branches', actionType: 'Add Branch', description: `${role} ${currentUser.name} added new branch ${nextBranch.name}.` })); setModal('') }} />}
+      </main>
+    )
+  }
+
+  if (!branch || !scoped) return null
+
+  const searchPool = [
+    ...scoped.activeTenants.map((tenant) => `${tenant.name} ${tenant.phone} ${tenant.email} ${data.rooms.find((room) => room.id === tenant.roomId)?.number} ${getPaymentStatus(tenant)}`),
+    ...scoped.inventory.map((item) => `${item.name} ${item.category}`),
+    ...scoped.tickets.map((ticket) => `${ticket.title} ${ticket.category}`),
+    ...data.invoices.filter((invoice) => invoice.branchId === branchId).map((invoice) => invoice.number),
+  ]
+  const searchHits = query ? searchPool.filter((item) => item.toLowerCase().includes(query.toLowerCase())).slice(0, 6) : []
+  const notifications = [
+    ...scoped.activeTenants.filter((tenant) => daysUntil(tenant.dueDate) <= 3 && Math.max(0, getTenantDue(tenant) - tenant.paidThisMonth) > 0).map((tenant) => `${tenant.name}: rent ${daysUntil(tenant.dueDate) < 0 ? 'overdue' : 'due soon'}`),
+    ...scoped.openTickets.map((ticket) => `Open maintenance: ${ticket.title}`),
+    ...scoped.activeTenants.filter((tenant) => tenant.status === 'Notice').map((tenant) => `Vacating notice: ${tenant.name}`),
+  ]
+
+  const nav = ([
+    { label: 'Switch Branch', icon: <ChevronLeft size={18} /> },
+    { label: 'Dashboard', icon: <LayoutDashboard size={18} /> },
+    { label: 'Tenants', icon: <Users size={18} /> },
+    { label: 'Rooms', icon: <Home size={18} /> },
+    { label: 'Payments', icon: <ReceiptText size={18} /> },
+    { label: 'Finance', icon: <CircleDollarSign size={18} /> },
+    { label: 'Inventory', icon: <Boxes size={18} /> },
+    { label: 'Maintenance', icon: <Wrench size={18} /> },
+    { label: 'Reports', icon: <FileBarChart size={18} /> },
+    { label: 'Settings', icon: <Settings size={18} /> },
+    { label: 'Sign Out', icon: <LogOut size={18} /> },
+  ] as { label: Page | 'Switch Branch' | 'Sign Out'; icon: ReactNode }[]).filter((item) => (isAdmin || item.label !== 'Settings') && (item.label !== 'Reports' || can('view_reports')))
+  const handleNav = (label: Page | 'Switch Branch' | 'Sign Out') => {
+    setMobileNav(false)
+    if (label === 'Switch Branch' || label === 'Sign Out') {
+      setBranchId('')
+      return
+    }
+    setPage(label)
+  }
+
+  return (
+    <div className="min-h-screen bg-[#f7f3ec] text-slate-900">
+      <aside className="no-print fixed inset-y-0 left-0 z-30 hidden w-64 bg-slate-950 p-4 text-white lg:block">
+        <div className="mb-6 flex items-center gap-3">
+          <div className="grid h-10 w-10 place-items-center rounded-md bg-blue-600 font-black">95</div>
+          <div><p className="font-bold">PG 95 Admin</p><p className="text-xs text-slate-400">{branch.name}</p></div>
+        </div>
+        <nav className="grid gap-1">
+          {nav.map((item) => (
+            <button key={item.label} onClick={() => handleNav(item.label)} className={`flex items-center gap-3 rounded-md px-3 py-2 text-left text-sm transition ${page === item.label ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800 hover:text-white'}`}>
+              {item.icon}{item.label}
+            </button>
+          ))}
+        </nav>
+      </aside>
+      {mobileNav && (
+        <div className="no-print fixed inset-0 z-40 bg-slate-950/40 lg:hidden">
+          <aside className="h-full w-72 bg-slate-950 p-4 text-white shadow-2xl">
+            <div className="mb-6 flex items-center justify-between gap-3">
+              <div><p className="font-bold">PG 95 Admin</p><p className="text-xs text-slate-400">{branch.name}</p></div>
+              <button aria-label="Close navigation" onClick={() => setMobileNav(false)} className="rounded-md p-2 hover:bg-slate-800"><X size={20} /></button>
+            </div>
+            <nav className="grid gap-1">
+              {nav.map((item) => (
+                <button key={item.label} onClick={() => handleNav(item.label)} className={`flex items-center gap-3 rounded-md px-3 py-2 text-left text-sm transition ${page === item.label ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800 hover:text-white'}`}>
+                  {item.icon}{item.label}
+                </button>
+              ))}
+            </nav>
+          </aside>
+        </div>
+      )}
+
+      <div className="lg:pl-64">
+        <header className="no-print sticky top-0 z-20 border-b border-slate-200 bg-white/90 px-4 py-3 backdrop-blur lg:px-6">
+          <div className="flex flex-wrap items-center gap-3">
+            <button aria-label="Open navigation" onClick={() => setMobileNav(true)} className="rounded-md p-2 hover:bg-slate-100 lg:hidden"><Menu size={22} /></button>
+            <div className="min-w-48 flex-1">
+              <h1 className="text-2xl font-black">{page}</h1>
+              <p className="text-sm text-slate-500">{branch.name}</p>
+            </div>
+            {can('add_cashbook') && <Button tone="green" onClick={() => setModal('cashbook')}><Plus size={18} /> Add Entry</Button>}
+            {can('admit_tenant') && <Button tone="blue" onClick={() => setModal('admit')}><UserPlus size={18} /> Admit Tenant</Button>}
+            <div className="relative min-w-56 flex-1 md:max-w-sm">
+              <Search className="absolute left-3 top-2.5 text-slate-400" size={18} />
+              <input value={query} onChange={(event) => setQuery(event.target.value)} className={`${inputClass} w-full pl-10`} placeholder="Search tenants, rooms, invoices..." />
+              {searchHits.length > 0 && <div className="absolute mt-2 w-full rounded-md border border-slate-200 bg-white p-2 shadow-lg">{searchHits.map((hit) => <p key={hit} className="truncate rounded px-2 py-1 text-sm hover:bg-slate-50">{hit}</p>)}</div>}
+            </div>
+            <div className="relative">
+              <button onClick={() => setModal('notifications')} className="relative rounded-md border border-slate-200 bg-white p-2"><Bell size={20} />{notifications.length > 0 && <span className="absolute -right-1 -top-1 rounded-full bg-rose-600 px-1.5 text-xs font-bold text-white">{notifications.length}</span>}</button>
+            </div>
+            <button onClick={() => setRole(role === 'Admin' ? 'Staff' : 'Admin')} className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-bold"><ShieldCheck className="mr-1 inline" size={16} /> {role}</button>
+          </div>
+        </header>
+
+        <main className="p-4 lg:p-6">
+          {page === 'Dashboard' && <Dashboard scoped={scoped} setModal={setModal} setPage={setPage} setTenantTab={setTenantTab} setTenantFilter={setTenantFilter} setRoomFloor={setRoomFloor} setFinanceTab={setFinanceTab} setPaymentFilter={setPaymentFilter} setTicketFilter={setTicketFilter} />}
+          {page === 'Tenants' && <TenantsPage data={data} scoped={scoped} tenantTab={tenantTab} setTenantTab={setTenantTab} filter={tenantFilter} setFilter={setTenantFilter} setModal={setModal} setSelectedTenantId={setSelectedTenantId} isAdmin={isAdmin} canAction={can} />}
+          {page === 'Rooms' && <RoomsPage scoped={scoped} roomFloor={roomFloor} setRoomFloor={setRoomFloor} setSelectedRoomId={setSelectedRoomId} setModal={setModal} isAdmin={isAdmin} />}
+          {page === 'Payments' && <PaymentsPage data={data} scoped={scoped} filter={paymentFilter} setFilter={setPaymentFilter} setModal={setModal} setSelectedTenantId={setSelectedTenantId} canAdd={can('add_payment')} />}
+          {page === 'Finance' && <FinancePage scoped={scoped} financeTab={financeTab} setFinanceTab={setFinanceTab} data={data} branch={branch} setModal={setModal} setSelectedTenantId={setSelectedTenantId} setSelectedCashbookId={setSelectedCashbookId} isAdmin={isAdmin} />}
+          {page === 'Inventory' && <InventoryPage scoped={scoped} filter={inventoryFilter} setFilter={setInventoryFilter} setModal={setModal} setSelectedInventoryId={setSelectedInventoryId} canAdd={can('add_inventory')} />}
+          {page === 'Maintenance' && <MaintenancePage data={data} scoped={scoped} filter={ticketFilter} setFilter={setTicketFilter} setModal={setModal} setSelectedTicketId={setSelectedTicketId} canResolve={can('resolve_maintenance')} canCreate={can('create_maintenance')} />}
+          {page === 'Reports' && <ReportsPage scoped={scoped} data={data} branch={branch} reportRange={reportRange} setReportRange={setReportRange} />}
+          {page === 'Settings' && isAdmin && <SettingsPage data={data} branch={branch} role={role} isAdmin={isAdmin} setModal={setModal} setSelectedUserId={setSelectedUserId} onDeactivateUser={(user) => updateData((previous) => ({ ...previous, users: previous.users.map((item) => item.id === user.id ? { ...item, active: false } : item) }), 'Deactivate Staff', 'Staff', `${role} ${currentUser.name} deactivated staff ${user.name}.`)} onToggleBranch={(item, active) => updateData((previous) => ({ ...previous, branches: previous.branches.map((candidate) => candidate.id === item.id ? { ...candidate, active } : candidate) }), active ? 'Reactivate Branch' : 'Deactivate Branch', 'Branches', `${role} ${currentUser.name} ${active ? 'reactivated' : 'deactivated'} branch ${item.name}.`)} />}
+        </main>
+      </div>
+
+      {modal === 'cashbook' && <CashbookModal onClose={() => setModal('')} onSubmit={(entry) => updateData((previous) => ({ ...previous, cashbook: [{ id: uid('c'), branchId, source: 'Manual', ...entry }, ...previous.cashbook] }), `Add ${entry.type}`, 'Cashbook', `${role} ${currentUser.name} added cashbook ${entry.type.toLowerCase()} of ${money(entry.amount)}. Description: ${entry.description}.`, { amount: entry.amount, type: entry.type })} />}
+      {modal === 'editCashbook' && <CashbookModal entry={data.cashbook.find((entry) => entry.id === selectedCashbookId)} onClose={() => setModal('')} onSubmit={(entry) => { const old = data.cashbook.find((item) => item.id === selectedCashbookId)!; updateData((previous) => ({ ...previous, cashbook: previous.cashbook.map((item) => item.id === selectedCashbookId ? { ...item, ...entry } : item) }), 'Edit Entry', 'Cashbook', `${role} ${currentUser.name} edited cashbook entry ${old.description}. Amount changed from ${money(old.amount)} to ${money(entry.amount)}; type ${old.type} to ${entry.type}.`) }} />}
+      {modal === 'admit' && <AdmitTenantModal rooms={scoped.rooms} tenants={scoped.activeTenants} onClose={() => setModal('')} onSubmit={(tenant) => updateData((previous) => ({ ...previous, tenants: [{ id: uid('t'), branchId, status: 'Active', paidThisMonth: 0, ...tenant }, ...previous.tenants] }), 'Admit Tenant', 'Tenants', `${role} ${currentUser.name} admitted tenant ${tenant.name} to Room ${data.rooms.find((room) => room.id === tenant.roomId)?.number}. Joining date: ${formatDate(tenant.joiningDate)}. Rent: ${money(tenant.monthlyRent)}.`, { tenant: tenant.name })} />}
+      {modal === 'payment' && <PaymentModal tenants={scoped.activeTenants} selectedTenantId={selectedTenantId} onClose={() => setModal('')} onSubmit={(tenantId, amount) => {
+        const tenant = data.tenants.find((item) => item.id === tenantId)!
+        const invoiceId = uid('i')
+        updateData((previous) => ({
+          ...previous,
+          tenants: previous.tenants.map((item) => item.id === tenantId ? { ...item, paidThisMonth: item.paidThisMonth + amount } : item),
+          payments: [{ id: uid('p'), branchId, tenantId, amount, date: today, month: currentMonth, status: amount >= Math.max(0, getTenantDue(tenant) - tenant.paidThisMonth) ? 'Received' : 'Partial', invoiceId }, ...previous.payments],
+          cashbook: [{ id: uid('c'), branchId, type: 'Credit', amount, description: `Rent received - ${tenant.name}`, date: today, source: 'Payment' }, ...previous.cashbook],
+          invoices: [{ id: invoiceId, branchId, tenantId, number: `PG95-${Date.now().toString().slice(-6)}`, period: 'June 2026', createdAt: today }, ...previous.invoices],
+        }), 'Add Payment', 'Payments', `${role} ${currentUser.name} added rent payment of ${money(amount)} for tenant ${tenant.name}, Room ${data.rooms.find((room) => room.id === tenant.roomId)?.number}. Payment mode: Cash.`, { tenant: tenant.name, amount })
+      }} />}
+      {modal === 'notice' && <NoticeModal onClose={() => setModal('')} onSubmit={(notice) => updateData((previous) => ({ ...previous, tenants: previous.tenants.map((tenant) => tenant.id === selectedTenantId ? { ...tenant, status: 'Notice', notice } : tenant) }), 'Issue tenant notice', 'tenants')} />}
+      {modal === 'vacate' && <VacateModal onClose={() => setModal('')} onSubmit={(left) => { const tenant = data.tenants.find((item) => item.id === selectedTenantId)!; updateData((previous) => ({ ...previous, tenants: previous.tenants.map((item) => item.id === selectedTenantId ? { ...item, status: 'Left', left } : item) }), 'Vacate Tenant', 'Tenants', `${role} ${currentUser.name} vacated tenant ${tenant.name} from Room ${data.rooms.find((room) => room.id === tenant.roomId)?.number}. Left date: ${formatDate(left.leftDate)}. Reason: ${left.reason}. Exit balance: ${money(left.finalRentBalance + left.electricityBalance + left.maintenanceDeduction)}.`) }} />}
+      {modal === 'editTenant' && <EditTenantModal tenant={data.tenants.find((tenant) => tenant.id === selectedTenantId)!} rooms={scoped.rooms} tenants={scoped.activeTenants} onClose={() => setModal('')} onSubmit={(changes) => { const tenant = data.tenants.find((item) => item.id === selectedTenantId)!; updateData((previous) => ({ ...previous, tenants: previous.tenants.map((item) => item.id === selectedTenantId ? { ...item, ...changes } : item) }), 'Edit Tenant', 'Tenants', `${role} ${currentUser.name} edited tenant ${tenant.name} details. Changed room from ${data.rooms.find((room) => room.id === tenant.roomId)?.number} to ${data.rooms.find((room) => room.id === changes.roomId)?.number}, rent from ${money(tenant.monthlyRent)} to ${money(changes.monthlyRent || 0)}.`) }} />}
+      {modal === 'moveTenant' && <MoveTenantModal tenant={data.tenants.find((tenant) => tenant.id === selectedTenantId)!} rooms={scoped.rooms} tenants={scoped.activeTenants} onClose={() => setModal('')} onSubmit={(roomId, note) => { const tenant = data.tenants.find((item) => item.id === selectedTenantId)!; updateData((previous) => ({ ...previous, tenants: previous.tenants.map((item) => item.id === selectedTenantId ? { ...item, roomId, bedNo: previous.tenants.filter((other) => other.roomId === roomId && other.status !== 'Left').length + 1 } : item) }), 'Move Tenant', 'Tenants', `${role} ${currentUser.name} moved tenant ${tenant.name} from Room ${data.rooms.find((room) => room.id === tenant.roomId)?.number} to Room ${data.rooms.find((room) => room.id === roomId)?.number} on ${formatDate(today)}.${note ? ` Reason: ${note}.` : ''}`) }} />}
+      {modal === 'editBranch' && <BranchModal branch={branch} onClose={() => setModal('')} onSubmit={(changes) => updateData((previous) => ({ ...previous, branches: previous.branches.map((item) => item.id === branchId ? { ...item, ...changes } : item) }), 'Edit Branch', 'Branches', `${role} ${currentUser.name} changed branch name from ${branch.name} to ${changes.name}. Address changed from ${branch.address} to ${changes.address}.`)} />}
+      {modal === 'addStaff' && <StaffModal branches={data.branches.filter((item) => item.active !== false)} onClose={() => setModal('')} onSubmit={(staff) => updateData((previous) => ({ ...previous, users: [...previous.users, { id: uid('u'), role: 'Staff', active: true, ...staff }] }), 'Add Staff', 'Staff', `${role} ${currentUser.name} added staff ${staff.name} and assigned branch ${staff.branchIds.map((id) => data.branches.find((item) => item.id === id)?.name).join(' and ')}.`)} />}
+      {modal === 'editStaff' && <StaffModal user={data.users.find((user) => user.id === selectedUserId)} branches={data.branches.filter((item) => item.active !== false)} onClose={() => setModal('')} onSubmit={(staff) => { const old = data.users.find((user) => user.id === selectedUserId)!; updateData((previous) => ({ ...previous, users: previous.users.map((user) => user.id === selectedUserId ? { ...user, ...staff } : user) }), 'Change Staff Access', 'Staff', `${role} ${currentUser.name} assigned staff ${old.name} to ${staff.branchIds.map((id) => data.branches.find((item) => item.id === id)?.name).join(' and ')}.`) }} />}
+      {modal === 'expense' && <ExpenseModal onClose={() => setModal('')} onSubmit={(expense) => updateData((previous) => ({ ...previous, expenses: [{ id: uid('e'), branchId, ...expense }, ...previous.expenses], cashbook: [{ id: uid('c'), branchId, type: 'Debit', amount: expense.amount, description: expense.description, date: expense.date, source: 'Expense' }, ...previous.cashbook] }), 'Add Expense', 'Finance', `${role} ${currentUser.name} added expense of ${money(expense.amount)} under ${expense.category}. Vendor/Note: ${expense.vendor || '-'}.`)} />}
+      {modal === 'purchase' && <PurchaseModal items={scoped.inventory} onClose={() => setModal('')} onSubmit={(payload) => { const itemName = payload.mode === 'New Item' ? payload.name : data.inventory.find((item) => item.id === payload.itemId)?.name; updateData((previous) => addPurchase(previous, branchId, payload), 'Add Purchase', 'Inventory', `${role} ${currentUser.name} added inventory purchase: ${itemName}, Qty ${payload.quantity}, Unit cost ${money(payload.unitCost)}, Total ${money(payload.quantity * payload.unitCost)}.`) }} />}
+      {modal === 'inventoryHistory' && <InventoryHistoryModal item={data.inventory.find((item) => item.id === selectedInventoryId)!} purchases={scoped.purchases.filter((purchase) => purchase.itemId === selectedInventoryId)} isAdmin={isAdmin} onClose={() => setModal('')} onEdit={(purchase) => { setSelectedCashbookId(purchase.id); setModal('editPurchase') }} onDelete={(purchase) => updateData((previous) => deletePurchase(previous, purchase), 'Delete inventory purchase', 'inventory_purchases')} />}
+      {modal === 'editPurchase' && <EditPurchaseModal purchase={data.purchases.find((purchase) => purchase.id === selectedCashbookId)!} onClose={() => setModal('')} onSubmit={(changes) => updateData((previous) => editPurchase(previous, selectedCashbookId, changes), 'Edit inventory purchase', 'inventory_purchases')} />}
+      {modal === 'ticket' && <TicketModal rooms={scoped.rooms} tenants={scoped.activeTenants} onClose={() => setModal('')} onSubmit={(ticket) => updateData((previous) => ({ ...previous, tickets: [{ id: uid('m'), branchId, status: 'Open', ...ticket }, ...previous.tickets] }), 'Create Ticket', 'Maintenance', `${role} ${currentUser.name} created maintenance ticket: ${ticket.title} for Room ${data.rooms.find((room) => room.id === ticket.roomId)?.number}. Category: ${ticket.category}.`)} />}
+      {modal === 'resolveTicket' && <ResolveTicketModal ticket={data.tickets.find((ticket) => ticket.id === selectedTicketId)!} room={data.rooms.find((room) => room.id === data.tickets.find((ticket) => ticket.id === selectedTicketId)?.roomId)} onClose={() => setModal('')} onSubmit={(resolution, markAvailable) => { const ticket = data.tickets.find((item) => item.id === selectedTicketId)!; const room = data.rooms.find((item) => item.id === ticket.roomId)!; updateData((previous) => ({ ...previous, tickets: previous.tickets.map((item) => item.id === selectedTicketId ? { ...item, status: 'Resolved', resolution } : item), rooms: markAvailable ? previous.rooms.map((item) => item.id === room.id ? { ...item, status: previous.tenants.filter((tenant) => tenant.roomId === item.id && tenant.status !== 'Left').length >= item.beds ? 'Occupied' : 'Vacant' } : item) : previous.rooms, expenses: resolution.cost > 0 ? [{ id: uid('e'), branchId, category: 'Maintenance', description: `Repair - ${ticket.title}`, amount: resolution.cost, date: resolution.date, vendor: resolution.vendor }, ...previous.expenses] : previous.expenses, cashbook: resolution.cost > 0 ? [{ id: uid('c'), branchId, type: 'Debit', amount: resolution.cost, description: `Maintenance repair - ${ticket.title}`, date: resolution.date, source: 'Maintenance' }, ...previous.cashbook] : previous.cashbook }), 'Resolve Ticket', 'Maintenance', `${role} ${currentUser.name} resolved maintenance ticket '${ticket.title}' for Room ${room.number}. Cost: ${money(resolution.cost)}. Note: ${resolution.note}.`) }} />}
+      {modal === 'reopenTicket' && <ConfirmModal title="Reopen ticket" message="Move this ticket back to Open status?" onClose={() => setModal('')} onConfirm={() => { const ticket = data.tickets.find((item) => item.id === selectedTicketId)!; updateData((previous) => ({ ...previous, tickets: previous.tickets.map((item) => item.id === selectedTicketId ? { ...item, status: 'Open', resolution: undefined } : item) }), 'Reopen Ticket', 'Maintenance', `${role} ${currentUser.name} reopened maintenance ticket '${ticket.title}'.`) }} />}
+      {modal === 'room' && <RoomDetailsModal room={data.rooms.find((room) => room.id === selectedRoomId)!} tenants={scoped.activeTenants.filter((tenant) => tenant.roomId === selectedRoomId)} tickets={scoped.tickets.filter((ticket) => ticket.roomId === selectedRoomId)} onClose={() => setModal('')} onAdmit={() => { setModal('admit') }} onMaintenance={() => updateData((previous) => ({ ...previous, rooms: previous.rooms.map((room) => room.id === selectedRoomId ? { ...room, status: 'Maintenance' } : room) }), 'Edit room maintenance', 'rooms')} />}
+      {modal === 'addRoom' && <RoomModal onClose={() => setModal('')} onSubmit={(room) => updateData((previous) => ({ ...previous, rooms: [{ id: uid('r'), branchId, ...room }, ...previous.rooms] }), 'Add Room', 'Rooms', `${role} ${currentUser.name} added Room ${room.number}, Type ${room.type}, Floor ${room.floor}, Capacity ${room.beds}, Rent ${money(room.rent)}.`)} />}
+      {modal === 'editRoom' && <RoomModal room={data.rooms.find((room) => room.id === selectedRoomId)} onClose={() => setModal('')} onSubmit={(changes) => { const old = data.rooms.find((room) => room.id === selectedRoomId)!; updateData((previous) => ({ ...previous, rooms: previous.rooms.map((room) => room.id === selectedRoomId ? { ...room, ...changes } : room) }), 'Edit Room', 'Rooms', `${role} ${currentUser.name} edited Room ${old.number}. Room number: ${old.number} to ${changes.number}; rent: ${money(old.rent)} to ${money(changes.rent)}.`) }} />}
+      {modal === 'confirmDeleteTenant' && <ConfirmModal title="Delete tenant" message="This archives the tenant and frees their bed. Payment history remains preserved." onClose={() => setModal('')} onConfirm={() => { const tenant = data.tenants.find((item) => item.id === selectedTenantId)!; updateData((previous) => ({ ...previous, tenants: previous.tenants.map((item) => item.id === selectedTenantId ? { ...item, status: 'Left', left: { leftDate: today, reason: 'Archived by admin', finalRentBalance: Math.max(0, getTenantDue(item) - item.paidThisMonth), electricityBalance: 0, maintenanceDeduction: 0, securityRefund: item.security, finalSettlement: item.security } } : item) }), 'Delete Tenant', 'Tenants', `${role} ${currentUser.name} archived tenant ${tenant.name} from Room ${data.rooms.find((room) => room.id === tenant.roomId)?.number}.`) }} />}
+      {modal === 'confirmDeleteRoom' && <ConfirmModal title="Remove room" message="This permanently removes the vacant room." onClose={() => setModal('')} onConfirm={() => { const room = data.rooms.find((item) => item.id === selectedRoomId)!; updateData((previous) => ({ ...previous, rooms: previous.rooms.filter((item) => item.id !== selectedRoomId) }), 'Delete Room', 'Rooms', `${role} ${currentUser.name} deleted vacant Room ${room.number}.`) }} />}
+      {modal === 'confirmDeleteCashbook' && <ConfirmModal title="Delete cashbook entry" message="Financial totals and running balances will be recalculated immediately." onClose={() => setModal('')} onConfirm={() => { const entry = data.cashbook.find((item) => item.id === selectedCashbookId)!; updateData((previous) => ({ ...previous, cashbook: previous.cashbook.filter((item) => item.id !== selectedCashbookId) }), 'Delete Entry', 'Cashbook', `${role} ${currentUser.name} deleted cashbook ${entry.type.toLowerCase()} of ${money(entry.amount)}. Description: ${entry.description}.`) }} />}
+      {modal === 'notifications' && <Modal title="Notifications" onClose={() => setModal('')}>{notifications.length ? <div className="grid gap-2">{notifications.map((note) => <div key={note} className="rounded-md bg-orange-50 p-3 text-sm font-semibold text-orange-800">{note}</div>)}</div> : <p>No active alerts.</p>}</Modal>}
+    </div>
+  )
+}
+
+function Dashboard({ scoped, setModal, setPage, setTenantTab, setTenantFilter, setRoomFloor, setFinanceTab, setPaymentFilter, setTicketFilter }: { scoped: ReturnType<typeof branchData>; setModal: (value: string) => void; setPage: (page: Page) => void; setTenantTab: (value: 'Active' | 'Left PG') => void; setTenantFilter: (value: string) => void; setRoomFloor: (value: string) => void; setFinanceTab: (value: string) => void; setPaymentFilter: (value: string) => void; setTicketFilter: (value: string) => void }) {
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'].map((month, index) => ({
+    month,
+    collected: Math.round(scoped.revenue * (0.65 + index * 0.07)),
+    expected: scoped.expected || 1,
+  }))
+  const roomDistribution = ['Single', 'Double', 'Triple', 'Suite'].map((type) => ({ name: type, value: scoped.rooms.filter((room) => room.type === type).length }))
+  const vacating = scoped.activeTenants.filter((tenant) => tenant.notice?.expectedLeavingDate.startsWith(currentMonth))
+  const alerts = [
+    ...scoped.activeTenants.filter((tenant) => getPaymentStatus(tenant) !== 'Paid').map((tenant) => ({ type: 'payment', text: `${tenant.name} has ${money(Math.max(0, getTenantDue(tenant) - tenant.paidThisMonth))} ${getPaymentStatus(tenant).toLowerCase()}` })),
+    ...scoped.openTickets.map((ticket) => ({ type: 'maintenance', text: `Maintenance: ${ticket.title}` })),
+    ...vacating.map((tenant) => ({ type: 'vacating', text: `${tenant.name} is leaving ${formatDate(tenant.notice?.expectedLeavingDate)}` })),
+  ]
+  return (
+    <div className="grid gap-4">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+        <Metric icon={<Users />} label="Current Tenants" value={scoped.activeTenants.length} onClick={() => { setTenantTab('Active'); setTenantFilter('All'); setPage('Tenants') }} />
+        <Metric icon={<Home />} label="Occupancy Rate" value={`${scoped.occupancyRate}%`} onClick={() => { setRoomFloor('All Floors'); setPage('Rooms') }} />
+        <Metric icon={<IndianRupee />} label="Revenue of current month" value={money(scoped.revenue)} onClick={() => { setFinanceTab('Cashbook'); setPage('Finance') }} />
+        <Metric icon={<AlertTriangle />} label="Overdue Payments" value={money(scoped.overdue)} tone="red" onClick={() => { setPaymentFilter('Overdue'); setPage('Payments') }} />
+        <Metric icon={<Wrench />} label="Open Maintenance Tickets" value={scoped.openTickets.length} tone="orange" onClick={() => { setTicketFilter('Active'); setPage('Maintenance') }} />
+      </div>
+      <div className="grid gap-4 xl:grid-cols-[1.5fr_1fr]">
+        <Card><h2 className="mb-4 text-lg font-bold">Revenue Overview</h2><div className="h-72"><ResponsiveContainer><BarChart data={months}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="month" /><YAxis /><Tooltip formatter={(value) => money(Number(value))} /><Legend /><Bar dataKey="collected" fill="#16a34a" radius={[4, 4, 0, 0]} /><Bar dataKey="expected" fill="#2563eb" radius={[4, 4, 0, 0]} /></BarChart></ResponsiveContainer></div></Card>
+        <Card><h2 className="mb-4 text-lg font-bold">Room Distribution</h2><div className="h-72"><ResponsiveContainer><PieChart><Pie data={roomDistribution} innerRadius={58} outerRadius={92} dataKey="value" label>{roomDistribution.map((_, index) => <Cell key={index} fill={['#2563eb', '#16a34a', '#f97316', '#8b5cf6'][index]} />)}</Pie><Tooltip /><Legend /></PieChart></ResponsiveContainer></div></Card>
+      </div>
+      <div className="grid gap-4 xl:grid-cols-3">
+        <Card><h2 className="mb-4 text-lg font-bold">Occupancy Trend</h2><div className="h-48"><ResponsiveContainer><AreaChart data={months.map((item, index) => ({ month: item.month, occupancy: Math.min(100, scoped.occupancyRate - 12 + index * 3) }))}><XAxis dataKey="month" /><YAxis /><Tooltip /><Area dataKey="occupancy" fill="#bfdbfe" stroke="#2563eb" /></AreaChart></ResponsiveContainer></div></Card>
+        <Card><button className="w-full text-left" onClick={() => { setTenantTab('Active'); setTenantFilter('Vacating Notice'); setPage('Tenants') }}><h2 className="mb-4 text-lg font-bold">Vacating This Month</h2><div className="grid gap-2">{vacating.length ? vacating.map((tenant) => <div key={tenant.id} className="rounded-md bg-orange-50 p-3 text-sm"><b>{tenant.name}</b><br />Leaving {formatDate(tenant.notice?.expectedLeavingDate)}</div>) : <p className="text-sm text-slate-500">No vacating notices for June.</p>}</div></button></Card>
+        <Card><h2 className="mb-4 text-lg font-bold">Alerts</h2><div className="grid gap-2">{alerts.slice(0, 5).map((alert) => <button key={`${alert.type}-${alert.text}`} onClick={() => { if (alert.type === 'maintenance') { setTicketFilter('Active'); setPage('Maintenance') } else if (alert.type === 'vacating') { setTenantTab('Active'); setTenantFilter('Vacating Notice'); setPage('Tenants') } else { setPaymentFilter(alert.text.includes('overdue') ? 'Overdue' : 'All'); setPage('Payments') } }} className="rounded-md bg-rose-50 p-3 text-left text-sm text-rose-800">{alert.text}</button>)}<Button tone="soft" onClick={() => setModal('notifications')}><Bell size={16} /> View all alerts</Button></div></Card>
+      </div>
+    </div>
+  )
+}
+
+function Metric({ icon, label, value, tone = 'blue', onClick }: { icon: ReactNode; label: string; value: ReactNode; tone?: 'blue' | 'red' | 'orange'; onClick?: () => void }) {
+  const color = tone === 'red' ? 'text-rose-600 bg-rose-50' : tone === 'orange' ? 'text-orange-600 bg-orange-50' : 'text-blue-600 bg-blue-50'
+  const content = <><div className={`mb-4 grid h-11 w-11 place-items-center rounded-md ${color}`}>{icon}</div><p className="text-sm text-slate-500">{label}</p><p className="mt-1 text-2xl font-black">{value}</p></>
+  return <Card>{onClick ? <button className="w-full text-left" onClick={onClick}>{content}</button> : content}</Card>
+}
+
+function TenantsPage({ data, scoped, tenantTab, setTenantTab, filter, setFilter, setModal, setSelectedTenantId, isAdmin, canAction }: { data: AppData; scoped: ReturnType<typeof branchData>; tenantTab: 'Active' | 'Left PG'; setTenantTab: (value: 'Active' | 'Left PG') => void; filter: string; setFilter: (value: string) => void; setModal: (value: string) => void; setSelectedTenantId: (id: string) => void; isAdmin: boolean; canAction: (permission: string) => boolean }) {
+  const filtered = scoped.activeTenants.filter((tenant) => filter === 'All' || (filter === 'Vacating Notice' ? tenant.status === 'Notice' : getPaymentStatus(tenant) === filter))
+  return (
+    <div className="grid gap-4">
+      <Tabs values={['Active', 'Left PG']} value={tenantTab} onChange={(value) => setTenantTab(value as 'Active' | 'Left PG')} />
+      {tenantTab === 'Active' ? <>
+        <Tabs values={['All', 'Paid', 'Pending', 'Overdue', 'Vacating Notice']} value={filter} onChange={setFilter} />
+        <DataTable headers={['Tenant name', 'Email/phone', 'Room', 'Room type', 'Monthly rent', 'Paid', 'Balance', 'Security', 'Electricity', 'Since', 'Rent Due Date', 'Status', 'Actions']}>
+          {filtered.map((tenant) => {
+            const room = data.rooms.find((item) => item.id === tenant.roomId)!
+            const balance = Math.max(0, getTenantDue(tenant) - tenant.paidThisMonth)
+            const status = getPaymentStatus(tenant)
+            const whatsapp = `https://wa.me/91${tenant.phone}?text=${encodeURIComponent(`Hi ${tenant.name}, rent ${money(getTenantDue(tenant))} for ${room.number} at ${data.branches.find((branch) => branch.id === tenant.branchId)?.name} is due on ${tenant.dueDate}. Balance: ${money(balance)}.`)}`
+            return <tr key={tenant.id} className="border-t border-slate-100">
+              <td className="p-3 font-semibold">{tenant.name}</td><td className="p-3 text-sm">{tenant.email}<br />{tenant.phone}</td><td className="p-3">{room.number}</td><td className="p-3">{room.type}</td><td className="p-3">{money(tenant.monthlyRent)}</td><td className="p-3 text-emerald-700">{money(tenant.paidThisMonth)}</td><td className="p-3 text-rose-700">{money(balance)}</td><td className="p-3">{money(tenant.security)}</td><td className="p-3">{tenant.electricity === 'Fixed' ? money(tenant.electricityAmount) : 'Included'}</td><td className="p-3">{formatDate(tenant.joiningDate)}</td><td className="p-3 font-semibold">{formatDate(tenant.dueDate)}</td><td className="p-3"><Badge tone={tenant.status === 'Notice' ? 'orange' : status === 'Paid' ? 'green' : status === 'Overdue' ? 'red' : 'orange'}>{tenant.status === 'Notice' ? 'Notice' : status}</Badge></td>
+              <td className="p-3"><div className="flex min-w-max items-center gap-1"><CompactAction title="View" onClick={() => alert(`${tenant.name}\nRoom ${room.number}\nID: ${tenant.idProof}`)}><Eye size={14} /></CompactAction>{isAdmin && <CompactAction title="Edit" onClick={() => { setSelectedTenantId(tenant.id); setModal('editTenant') }}><Edit3 size={14} /></CompactAction>}{canAction('move_tenant') && <CompactAction title="Move" onClick={() => { setSelectedTenantId(tenant.id); setModal('moveTenant') }}><Home size={14} /></CompactAction>}{canAction('add_payment') && <CompactAction title="Add Payment" onClick={() => { setSelectedTenantId(tenant.id); setModal('payment') }}><IndianRupee size={14} /></CompactAction>}<a title="WhatsApp Reminder" aria-label="WhatsApp Reminder" className="grid h-8 w-8 place-items-center rounded-md border border-slate-200 text-emerald-700 hover:bg-emerald-50" href={whatsapp} target="_blank"><MessageCircle size={14} /></a><CompactAction title="Notice" onClick={() => { setSelectedTenantId(tenant.id); setModal('notice') }}><CalendarClock size={14} /></CompactAction>{canAction('vacate_tenant') && <CompactAction title="Vacate" onClick={() => { setSelectedTenantId(tenant.id); setModal('vacate') }}><LogOut size={14} /></CompactAction>}{isAdmin && <CompactAction title="Delete" danger onClick={() => { setSelectedTenantId(tenant.id); setModal('confirmDeleteTenant') }}><Trash2 size={14} /></CompactAction>}</div></td>
+            </tr>
+          })}
+        </DataTable>
+      </> : <DataTable headers={['Tenant', 'Room', 'Type', 'Joined', 'Left date', 'Reason', 'Security', 'Balance at exit', 'Contact']}>{scoped.leftTenants.map((tenant) => { const room = data.rooms.find((item) => item.id === tenant.roomId)!; return <tr key={tenant.id} className="border-t border-slate-100"><td className="p-3 font-semibold">{tenant.name}</td><td className="p-3">{room.number}</td><td className="p-3">{room.type}</td><td className="p-3">{tenant.joiningDate}</td><td className="p-3">{tenant.left?.leftDate}</td><td className="p-3">{tenant.left?.reason}</td><td className="p-3">{money(tenant.security)}</td><td className="p-3">{money(tenant.left?.finalRentBalance || 0)}</td><td className="p-3">{tenant.phone}</td></tr> })}</DataTable>}
+    </div>
+  )
+}
+
+function RoomsPage({ scoped, roomFloor, setRoomFloor, setSelectedRoomId, setModal, isAdmin }: { scoped: ReturnType<typeof branchData>; roomFloor: string; setRoomFloor: (value: string) => void; setSelectedRoomId: (id: string) => void; setModal: (value: string) => void; isAdmin: boolean }) {
+  const rooms = scoped.rooms.filter((room) => roomFloor === 'All Floors' || room.floor === Number(roomFloor.replace('Floor ', '')))
+  return <div className="grid gap-4"><div className="flex flex-wrap items-center justify-between gap-3"><Tabs values={['All Floors', 'Floor 1', 'Floor 2', 'Floor 3']} value={roomFloor} onChange={setRoomFloor} />{isAdmin && <Button tone="blue" onClick={() => setModal('addRoom')}><Plus size={16} /> Add Room</Button>}</div><div className="flex flex-wrap gap-3 text-sm"><Badge tone="green">Occupied</Badge><Badge>Vacant</Badge><Badge tone="orange">Maintenance</Badge></div><div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{rooms.map((room) => { const tenants = scoped.activeTenants.filter((tenant) => tenant.roomId === room.id); return <Card key={room.id}><button onClick={() => { setSelectedRoomId(room.id); setModal('room') }} className="w-full text-left"><div className="flex items-start justify-between"><h2 className="text-2xl font-black">Room {room.number}</h2><Badge tone={room.status === 'Occupied' ? 'green' : room.status === 'Maintenance' ? 'orange' : 'slate'}>{room.status}</Badge></div><p className="mt-2 text-sm text-slate-500">{room.type} · Floor {room.floor} · {room.beds} beds</p><div className="mt-4 min-h-16 rounded-md bg-slate-50 p-3 text-sm">{tenants.length ? tenants.map((tenant) => <p key={tenant.id} className="font-semibold">{tenant.name}</p>) : 'No tenant assigned'}</div><p className="mt-4 font-bold">{money(room.rent)} / month</p></button>{isAdmin && <div className="mt-3 flex justify-end gap-1 border-t border-slate-100 pt-3"><CompactAction title="Edit room" onClick={() => { setSelectedRoomId(room.id); setModal('editRoom') }}><Edit3 size={14} /></CompactAction><CompactAction title="Remove room" danger onClick={() => { setSelectedRoomId(room.id); if (tenants.length) alert('Cannot remove room with active tenants. Vacate or move tenants first.'); else setModal('confirmDeleteRoom') }}><Trash2 size={14} /></CompactAction></div>}</Card> })}</div></div>
+}
+
+function PaymentsPage({ data, scoped, filter, setFilter, setModal, setSelectedTenantId, canAdd }: { data: AppData; scoped: ReturnType<typeof branchData>; filter: string; setFilter: (value: string) => void; setModal: (value: string) => void; setSelectedTenantId: (id: string) => void; canAdd: boolean }) {
+  const tenants = scoped.activeTenants.filter((tenant) => filter === 'All' || getPaymentStatus(tenant) === filter)
+  const collected = scoped.activeTenants.reduce((sum, tenant) => sum + tenant.paidThisMonth, 0)
+  return <div className="grid gap-4"><div className="grid gap-4 md:grid-cols-3"><Metric icon={<IndianRupee />} label="Total Collected" value={money(collected)} /><Metric icon={<ReceiptText />} label="Balance Due" value={money(scoped.pending)} tone="orange" /><Metric icon={<AlertTriangle />} label="Overdue" value={money(scoped.overdue)} tone="red" /></div><Tabs values={['All', 'Paid', 'Pending', 'Overdue']} value={filter} onChange={setFilter} /><DataTable headers={['Tenant', 'Room', 'Rent Due Date', 'Monthly rent', 'Paid', 'Balance', 'Electricity', 'Status', 'Actions']}>{tenants.map((tenant) => { const room = data.rooms.find((item) => item.id === tenant.roomId)!; const balance = Math.max(0, getTenantDue(tenant) - tenant.paidThisMonth); const status = getPaymentStatus(tenant); return <tr key={tenant.id} className="border-t border-slate-100"><td className="p-3 font-semibold">{tenant.name}</td><td className="p-3">{room.number}</td><td className="p-3 font-semibold">{formatDate(tenant.dueDate)}</td><td className="p-3">{money(tenant.monthlyRent)}</td><td className="p-3 text-emerald-700">{money(tenant.paidThisMonth)}</td><td className="p-3 text-rose-700">{money(balance)}</td><td className="p-3">{tenant.electricity === 'Fixed' ? money(tenant.electricityAmount) : 'Included'}</td><td className="p-3"><Badge tone={status === 'Paid' ? 'green' : status === 'Overdue' ? 'red' : 'orange'}>{status}</Badge></td><td className="p-3">{canAdd && <Button tone="green" onClick={() => { setSelectedTenantId(tenant.id); setModal('payment') }}><Plus size={15} /> Add received payment</Button>}</td></tr> })}</DataTable></div>
+}
+
+function FinancePage({ scoped, financeTab, setFinanceTab, data, branch, setModal, setSelectedTenantId, setSelectedCashbookId, isAdmin }: { scoped: ReturnType<typeof branchData>; financeTab: string; setFinanceTab: (value: string) => void; data: AppData; branch: Branch; setModal: (value: string) => void; setSelectedTenantId: (value: string) => void; setSelectedCashbookId: (value: string) => void; isAdmin: boolean }) {
+  let running = 0
+  const rows = scoped.cashbook.map((entry) => { running += entry.type === 'Credit' ? entry.amount : -entry.amount; return { ...entry, running } })
+  return <div className="grid gap-4"><Tabs values={['Cashbook', 'Expenses', 'Bill Creator']} value={financeTab} onChange={setFinanceTab} />{financeTab === 'Cashbook' && <><div className="grid gap-4 md:grid-cols-3"><Metric icon={<IndianRupee />} label="Total Income" value={money(scoped.revenue)} /><Metric icon={<CircleDollarSign />} label="Total Expenses" value={money(scoped.expensesTotal)} tone="red" /><Metric icon={<ReceiptText />} label="Net Balance" value={money(scoped.net)} /></div><DataTable headers={['Date', 'Description', 'Credit', 'Debit', 'Running balance', 'Actions']}>{rows.map((entry) => <tr key={entry.id} className="border-t border-slate-100"><td className="p-3">{entry.date}</td><td className="p-3">{entry.description}{entry.source !== 'Manual' && <span className="ml-2 text-xs text-slate-400">Linked: {entry.source}</span>}</td><td className="p-3 text-emerald-700">{entry.type === 'Credit' ? money(entry.amount) : '-'}</td><td className="p-3 text-rose-700">{entry.type === 'Debit' ? money(entry.amount) : '-'}</td><td className="p-3 font-bold">{money(entry.running)}</td><td className="p-3">{isAdmin && <div className="flex gap-1"><CompactAction title="Edit entry" disabled={!isAdmin || entry.source !== 'Manual'} onClick={() => { setSelectedCashbookId(entry.id); setModal('editCashbook') }}><Edit3 size={14} /></CompactAction><CompactAction title="Delete entry" danger disabled={!isAdmin || entry.source !== 'Manual'} onClick={() => { setSelectedCashbookId(entry.id); setModal('confirmDeleteCashbook') }}><Trash2 size={14} /></CompactAction></div>}</td></tr>)}</DataTable><p className="text-xs text-slate-500">Linked entries are managed from their source module to preserve financial consistency.</p></>}{financeTab === 'Expenses' && <><div className="grid gap-4 md:grid-cols-5">{['Grocery', 'Vegetables', 'Gas Cylinder', 'Staff Salary', 'Miscellaneous'].map((category) => <Card key={category}><p className="text-sm text-slate-500">{category}</p><p className="text-xl font-black">{money(scoped.expenses.filter((expense) => expense.category === category).reduce((sum, expense) => sum + expense.amount, 0))}</p></Card>)}</div><Button tone="red" onClick={() => setModal('expense')}><Plus size={16} /> Add Expense</Button><DataTable headers={['Date', 'Category', 'Description', 'Amount', 'Vendor/note']}>{scoped.expenses.map((expense) => <tr key={expense.id} className="border-t border-slate-100"><td className="p-3">{expense.date}</td><td className="p-3">{expense.category}</td><td className="p-3">{expense.description}</td><td className="p-3 text-rose-700">{money(expense.amount)}</td><td className="p-3">{expense.vendor}</td></tr>)}</DataTable></>}{financeTab === 'Bill Creator' && <BillCreator scoped={scoped} data={data} branch={branch} setSelectedTenantId={setSelectedTenantId} />}</div>
+}
+
+function BillCreator({ scoped, data, branch, setSelectedTenantId }: { scoped: ReturnType<typeof branchData>; data: AppData; branch: Branch; setSelectedTenantId: (value: string) => void }) {
+  const [tenantId, setTenantId] = useState(scoped.activeTenants[0]?.id || '')
+  const tenant = scoped.activeTenants.find((item) => item.id === tenantId)
+  const room = tenant ? data.rooms.find((item) => item.id === tenant.roomId) : undefined
+  if (!tenant || !room) return <Card>No tenant available for invoice generation.</Card>
+  const balance = Math.max(0, getTenantDue(tenant) - tenant.paidThisMonth)
+  const electricity = tenant.electricity === 'Fixed' ? tenant.electricityAmount : 0
+  const status = getPaymentStatus(tenant)
+  const invoice = data.invoices.find((item) => item.tenantId === tenant.id) ?? { number: `PG95-${tenant.id.toUpperCase()}`, period: 'June 1 - June 30, 2026' }
+  return <div className="invoice-layout grid gap-4 lg:grid-cols-[320px_1fr]"><Card className="no-print"><Field label="Select tenant"><select value={tenantId} onChange={(event) => { setTenantId(event.target.value); setSelectedTenantId(event.target.value) }} className={inputClass}>{scoped.activeTenants.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field></Card><article className="invoice-sheet print-surface rounded-lg border border-slate-200 bg-white p-8 shadow-sm"><header className="flex items-start justify-between border-b-2 border-slate-900 pb-5"><div><p className="text-xs font-bold uppercase text-blue-600">PG 95 Admin Portal</p><h2 className="mt-1 text-3xl font-black">{branch.name}</h2><p className="mt-1 text-sm text-slate-500">{branch.address}</p></div><div className="text-right"><h3 className="text-2xl font-black">INVOICE</h3><p className="mt-1 text-sm">{invoice.number}</p></div></header><section className="grid grid-cols-2 gap-6 border-b border-slate-200 py-5 text-sm"><div><p className="text-xs font-bold uppercase text-slate-400">Bill to</p><p className="mt-2 text-lg font-bold">{tenant.name}</p><p><b>Phone:</b> {tenant.phone}</p><p>Room {room.number} · {room.type}</p></div><div className="text-right"><p><b>Billing period:</b> {invoice.period}</p><p className="mt-2"><b>Invoice date:</b> {formatDate(today)}</p><p className="mt-2"><b>Due date:</b> {formatDate(tenant.dueDate)}</p></div></section><table className="my-5 w-full text-sm"><thead><tr className="border-b bg-slate-50 text-left"><th className="p-3">Description</th><th className="p-3 text-right">Amount</th></tr></thead><tbody><tr className="border-b"><td className="p-3">Monthly rent</td><td className="p-3 text-right">{money(tenant.monthlyRent)}</td></tr><tr className="border-b"><td className="p-3">Electricity charge</td><td className="p-3 text-right">{electricity ? money(electricity) : 'Included'}</td></tr><tr className="border-b"><td className="p-3">Security deposit on record</td><td className="p-3 text-right">{money(tenant.security)}</td></tr></tbody></table><section className="ml-auto grid max-w-sm gap-2 text-sm"><p className="flex justify-between"><span>Total payable</span><b>{money(getTenantDue(tenant))}</b></p><p className="flex justify-between text-emerald-700"><span>Amount paid</span><b>- {money(tenant.paidThisMonth)}</b></p><p className="flex justify-between border-t-2 border-slate-900 pt-3 text-lg"><span>Balance due</span><b>{money(balance)}</b></p><p className="mt-2 flex justify-between"><span>Payment status</span><Badge tone={status === 'Paid' ? 'green' : status === 'Overdue' ? 'red' : 'orange'}>{status}</Badge></p></section><footer className="mt-10 border-t border-slate-200 pt-4 text-center text-xs text-slate-500">Computer-generated invoice · Thank you</footer><div className="no-print mt-6 flex justify-end gap-2"><Button tone="soft" onClick={() => window.print()}><Printer size={16} /> Print</Button><Button tone="blue" onClick={() => window.print()}><Download size={16} /> Download / Save PDF</Button></div></article></div>
+}
+
+function InventoryPage({ scoped, filter, setFilter, setModal, setSelectedInventoryId, canAdd }: { scoped: ReturnType<typeof branchData>; filter: string; setFilter: (value: string) => void; setModal: (value: string) => void; setSelectedInventoryId: (value: string) => void; canAdd: boolean }) {
+  const items = scoped.inventory.filter((item) => filter === 'All' || item.category === filter)
+  return <div className="grid gap-4"><div className="grid gap-4 md:grid-cols-2"><Metric icon={<Boxes />} label="Total items quantity" value={scoped.inventory.reduce((sum, item) => sum + item.stock, 0)} /><Metric icon={<ClipboardList />} label="Item types" value={scoped.inventory.length} /></div><Tabs values={['All', 'Furniture', 'Linen', 'Kitchen', 'Electrical', 'Housekeeping']} value={filter} onChange={setFilter} />{canAdd && <Button tone="green" onClick={() => setModal('purchase')}><PackagePlus size={16} /> Add Purchase</Button>}<DataTable headers={['Item', 'Category', 'Current stock', 'Unit', 'Last purchase', 'History']}>{items.map((item) => <tr key={item.id} className="border-t border-slate-100"><td className="p-3 font-semibold">{item.name}</td><td className="p-3">{item.category}</td><td className="p-3">{item.stock}</td><td className="p-3">{item.unit}</td><td className="p-3">{item.lastPurchase}</td><td className="p-3"><Button tone="soft" onClick={() => { setSelectedInventoryId(item.id); setModal('inventoryHistory') }}><History size={15} /> Purchase history</Button></td></tr>)}</DataTable></div>
+}
+
+function MaintenancePage({ data, scoped, filter, setFilter, setModal, setSelectedTicketId, canResolve, canCreate }: { data: AppData; scoped: ReturnType<typeof branchData>; filter: string; setFilter: (value: string) => void; setModal: (value: string) => void; setSelectedTicketId: (value: string) => void; canResolve: boolean; canCreate: boolean }) {
+  const tickets = scoped.tickets.filter((ticket) => filter === 'All' || (filter === 'Active' ? ticket.status !== 'Resolved' : ticket.status === filter))
+  return <div className="grid gap-4"><div className="flex flex-wrap items-center justify-between gap-3"><Tabs values={['All', 'Active', 'Open', 'In Progress', 'Resolved']} value={filter} onChange={setFilter} />{canCreate && <Button tone="blue" onClick={() => setModal('ticket')}><Plus size={16} /> New Request</Button>}</div><div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{tickets.map((ticket) => { const room = data.rooms.find((item) => item.id === ticket.roomId); const tenant = data.tenants.find((item) => item.id === ticket.tenantId); return <Card key={ticket.id}><div className="flex items-start justify-between gap-2"><h2 className="font-bold">{ticket.title}</h2><Badge tone={ticket.status === 'Resolved' ? 'green' : ticket.status === 'Open' ? 'red' : 'orange'}>{ticket.status}</Badge></div><p className="mt-3 text-sm text-slate-500">Room {room?.number} {tenant ? `· ${tenant.name}` : ''}</p><p className="mt-2 text-sm">{ticket.category} · {ticket.priority}</p><p className="mt-2 text-sm">Raised {formatDate(ticket.raisedDate)}</p><p className="mt-2 text-sm font-semibold">Assigned: {ticket.assignedTo}</p>{canResolve && <div className="mt-4 flex gap-2">{ticket.status === 'Resolved' ? <Button tone="soft" onClick={() => { setSelectedTicketId(ticket.id); setModal('reopenTicket') }}>Reopen</Button> : <Button tone="green" onClick={() => { setSelectedTicketId(ticket.id); setModal('resolveTicket') }}>Resolve</Button>}</div>}</Card> })}</div></div>
+}
+
+function ReportsPage({ scoped, data, branch, reportRange, setReportRange }: { scoped: ReturnType<typeof branchData>; data: AppData; branch: Branch; reportRange: string; setReportRange: (value: string) => void }) {
+  const paidTenants = scoped.activeTenants.filter((tenant) => getPaymentStatus(tenant) === 'Paid').length
+  const pendingTenants = scoped.activeTenants.filter((tenant) => getPaymentStatus(tenant) === 'Pending').length
+  const overdueTenants = scoped.activeTenants.filter((tenant) => getPaymentStatus(tenant) === 'Overdue').length
+  const categoryExpenses = Object.entries(scoped.expenses.reduce<Record<string, number>>((acc, expense) => ({ ...acc, [expense.category]: (acc[expense.category] || 0) + expense.amount }), {}))
+  const csv = `Metric,Value\nTotal revenue,${scoped.revenue}\nTotal expenses,${scoped.expensesTotal}\nNet profit,${scoped.net}\nTotal tenants,${scoped.activeTenants.length}\nOccupancy rate,${scoped.occupancyRate}%`
+  return <div className="grid gap-4"><div className="no-print flex flex-wrap items-center justify-between gap-3"><Tabs values={['Monthly Summary', 'Quarterly Summary', 'Yearly Summary', 'Custom date range']} value={reportRange} onChange={setReportRange} /><div className="flex gap-2"><Button tone="soft" onClick={() => window.print()}><Printer size={16} /> Print report</Button><Button tone="blue" onClick={() => downloadText('pg95-report.csv', csv)}><Download size={16} /> Export Excel/CSV</Button><Button tone="soft" onClick={() => downloadText('pg95-report.txt', `${branch.name} ${reportRange}\nRevenue ${money(scoped.revenue)}`)}><FileText size={16} /> Download PDF</Button></div></div><Card className="print-surface"><h2 className="text-2xl font-black">{branch.name} - {reportRange}</h2><p className="text-sm text-slate-500">{branch.address}</p><div className="mt-5 grid gap-4 md:grid-cols-3 xl:grid-cols-4">{[['Total revenue', money(scoped.revenue)], ['Total expenses', money(scoped.expensesTotal)], ['Net profit', money(scoped.net)], ['Total tenants', scoped.activeTenants.length], ['New admissions', scoped.activeTenants.filter((tenant) => tenant.joiningDate.startsWith(currentMonth)).length], ['Vacated tenants', scoped.leftTenants.length], ['Occupancy rate', `${scoped.occupancyRate}%`], ['Paid tenants', paidTenants], ['Pending tenants', pendingTenants], ['Overdue tenants', overdueTenants], ['Maintenance tickets', scoped.tickets.length], ['Inventory purchases', scoped.purchases.length]].map(([label, value]) => <div key={label} className="rounded-md bg-slate-50 p-3"><p className="text-xs text-slate-500">{label}</p><p className="text-xl font-black">{value}</p></div>)}</div><div className="mt-5 grid gap-4 lg:grid-cols-3"><Card><h3 className="font-bold">Category-wise expenses</h3>{categoryExpenses.map(([category, amount]) => <p key={category} className="mt-2 flex justify-between text-sm"><span>{category}</span><b>{money(amount)}</b></p>)}</Card><Card><h3 className="font-bold">Room-wise occupancy</h3>{scoped.rooms.map((room) => <p key={room.id} className="mt-2 flex justify-between text-sm"><span>Room {room.number}</span><b>{scoped.activeTenants.filter((tenant) => tenant.roomId === room.id).length}/{room.beds}</b></p>)}</Card><Card><h3 className="font-bold">Branch performance</h3>{data.branches.map((item) => { const stats = branchData(data, item.id); return <p key={item.id} className="mt-2 flex justify-between text-sm"><span>{item.name}</span><b>{money(stats.net)}</b></p> })}</Card></div></Card></div>
+}
+
+function SettingsPage({ data, branch, role, isAdmin, setModal, setSelectedUserId, onDeactivateUser, onToggleBranch }: { data: AppData; branch: Branch; role: Role; isAdmin: boolean; setModal: (value: string) => void; setSelectedUserId: (value: string) => void; onDeactivateUser: (user: User) => void; onToggleBranch: (branch: Branch, active: boolean) => void }) {
+  const [userFilter, setUserFilter] = useState('All')
+  const [moduleFilter, setModuleFilter] = useState('All')
+  const [actionFilter, setActionFilter] = useState('All')
+  const [dateFilter, setDateFilter] = useState('')
+  const [search, setSearch] = useState('')
+  const logs = data.activityLogs.filter((log) => log.branchId === branch.id && (userFilter === 'All' || log.userId === userFilter) && (moduleFilter === 'All' || log.module === moduleFilter) && (actionFilter === 'All' || log.actionType === actionFilter) && (!dateFilter || log.at.startsWith(dateFilter)) && (!search || `${log.description} ${log.actionType} ${log.module}`.toLowerCase().includes(search.toLowerCase())))
+  return <div className="grid gap-4"><Card><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-xl font-bold">Branch & Access</h2><p className="mt-1 text-sm text-slate-500">{branch.name} · {branch.address}</p></div>{isAdmin && <Button tone="soft" onClick={() => setModal('editBranch')}><Edit3 size={16} /> Edit Branch</Button>}</div><div className="mt-4 grid gap-2 text-sm"><p>Current role: <b>{role}</b></p><p><b>Admin:</b> Full branch, master-data, finance, inventory and audit access.</p><p><b>Staff:</b> View and add operational entries; existing records and admin settings remain protected.</p></div></Card>{isAdmin && <><Card><div className="flex items-center justify-between gap-3"><h2 className="text-xl font-bold">Staff Management</h2><Button onClick={() => setModal('addStaff')}><UserPlus size={16} /> Add Staff</Button></div><div className="mt-4 grid gap-2">{data.users.filter((user) => user.role === 'Staff').map((user) => <div key={user.id} className="flex flex-wrap items-center justify-between gap-3 rounded-md bg-slate-50 p-3"><div><b>{user.name}</b><p className="text-xs text-slate-500">{user.username} · {user.active === false ? 'Deactivated' : user.branchIds.map((id) => data.branches.find((item) => item.id === id)?.name).join(', ')}</p></div><div className="flex gap-2">{user.active !== false && <><Button tone="soft" onClick={() => { setSelectedUserId(user.id); setModal('editStaff') }}><Edit3 size={15} /> Edit</Button><Button tone="red" onClick={() => onDeactivateUser(user)}>Deactivate</Button></>}</div></div>)}</div></Card><Card><h2 className="text-xl font-bold">Branch Lifecycle</h2><div className="mt-4 grid gap-2">{data.branches.map((item) => <div key={item.id} className="flex items-center justify-between gap-3 rounded-md bg-slate-50 p-3"><span><b>{item.name}</b><br /><small>{item.active === false ? 'Deactivated' : 'Active'}</small></span>{item.id !== branch.id && <Button tone={item.active === false ? 'green' : 'red'} onClick={() => onToggleBranch(item, item.active === false)}>{item.active === false ? 'Reactivate' : 'Deactivate'}</Button>}</div>)}</div></Card></>}{isAdmin && <Card><h2 className="text-xl font-bold">Activity Log</h2><div className="mt-4 grid gap-3 md:grid-cols-5"><select className={inputClass} value={userFilter} onChange={(event) => setUserFilter(event.target.value)}><option>All</option>{data.users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select><select className={inputClass} value={moduleFilter} onChange={(event) => setModuleFilter(event.target.value)}><option>All</option>{Array.from(new Set(data.activityLogs.map((log) => log.module))).map((entity) => <option key={entity}>{entity}</option>)}</select><select aria-label="Filter action type" className={inputClass} value={actionFilter} onChange={(event) => setActionFilter(event.target.value)}><option>All</option>{Array.from(new Set(data.activityLogs.map((log) => log.actionType))).map((action) => <option key={action}>{action}</option>)}</select><input aria-label="Filter activity date" className={inputClass} type="date" value={dateFilter} onChange={(event) => setDateFilter(event.target.value)} /><input aria-label="Search activity" className={inputClass} placeholder="Search activity..." value={search} onChange={(event) => setSearch(event.target.value)} /></div><div className="mt-4 grid max-h-[520px] gap-2 overflow-auto">{logs.map((log) => { const user = data.users.find((item) => item.id === log.userId); return <div key={log.id} className="rounded-md bg-slate-50 p-3 text-sm"><div className="flex flex-wrap justify-between gap-2"><b>{log.actionType}</b><span>{formatDateTime(log.at)}</span></div><p className="mt-1 text-slate-600">{user?.name} · {log.role} · {log.branchName} · Module: {log.module}</p><p className="mt-2 font-medium text-slate-800">{log.description}</p></div> })}{!logs.length && <p className="text-sm text-slate-500">No matching activity.</p>}</div></Card>}</div>
+}
+
+function Tabs({ values, value, onChange }: { values: string[]; value: string; onChange: (value: string) => void }) {
+  return <div className="no-print flex flex-wrap gap-2">{values.map((item) => <button type="button" key={item} onClick={() => onChange(item)} className={`rounded-md px-3 py-2 text-sm font-bold ${value === item ? 'bg-blue-600 text-white' : 'bg-white text-slate-600 border border-slate-200'}`}>{item}</button>)}</div>
+}
+
+function DataTable({ headers, children }: { headers: string[]; children: ReactNode }) {
+  return <Card className="overflow-hidden p-0"><div className="overflow-auto"><table className="w-full min-w-[960px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>{headers.map((header) => <th key={header} className="p-3">{header}</th>)}</tr></thead><tbody>{children}</tbody></table></div></Card>
+}
+
+function CashbookModal({ entry, onClose, onSubmit }: { entry?: CashbookEntry; onClose: () => void; onSubmit: (entry: Omit<CashbookEntry, 'id' | 'branchId' | 'source' | 'linkedId'>) => void }) {
+  const [type, setType] = useState<EntryType>(entry?.type || 'Credit')
+  const [amount, setAmount] = useState(entry?.amount || 0)
+  const [description, setDescription] = useState(entry?.description || '')
+  const [date, setDate] = useState(entry?.date || today)
+  return <Modal title={entry ? 'Edit Cashbook Entry' : 'Add Cashbook Entry'} onClose={onClose}><form className="grid gap-4" onSubmit={(event) => { event.preventDefault(); onSubmit({ type, amount, description, date }); onClose() }}><Field label="Transaction type"><select className={inputClass} value={type} onChange={(event) => setType(event.target.value as EntryType)}><option>Credit</option><option>Debit</option></select></Field><Field label="Amount"><input className={inputClass} type="number" min="0.01" step="0.01" required value={amount || ''} onChange={(event) => setAmount(Number(event.target.value))} /></Field><Field label="Description"><input className={inputClass} required value={description} onChange={(event) => setDescription(event.target.value)} /></Field><Field label="Date"><input className={inputClass} type="date" value={date} onChange={(event) => setDate(event.target.value)} /></Field><div className="flex justify-end gap-2"><Button tone="soft" onClick={onClose}>Cancel</Button><Button tone={type === 'Credit' ? 'green' : 'red'} type="submit">{entry ? 'Save Changes' : type === 'Credit' ? 'Add Credit' : 'Add Debit'}</Button></div></form></Modal>
+}
+
+function EditTenantModal({ tenant, rooms, tenants, onClose, onSubmit }: { tenant: Tenant; rooms: Room[]; tenants: Tenant[]; onClose: () => void; onSubmit: (changes: Partial<Tenant>) => void }) {
+  const [roomId, setRoomId] = useState(tenant.roomId)
+  const available = rooms.filter((room) => room.id === tenant.roomId || (room.status !== 'Maintenance' && tenants.filter((item) => item.roomId === room.id && item.id !== tenant.id).length < room.beds))
+  return <Modal title="Edit Tenant" onClose={onClose}><form className="grid gap-4 md:grid-cols-2" onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); const room = rooms.find((item) => item.id === roomId)!; const occupants = tenants.filter((item) => item.roomId === roomId && item.id !== tenant.id); onSubmit({ name: String(form.get('name')), phone: String(form.get('phone')), email: String(form.get('email') || ''), roomId, bedNo: roomId === tenant.roomId ? tenant.bedNo : Math.min(occupants.length + 1, room.beds), joiningDate: String(form.get('joiningDate')), monthlyRent: Number(form.get('monthlyRent')), security: Number(form.get('security')), electricity: String(form.get('electricity')) as Tenant['electricity'], electricityAmount: Number(form.get('electricityAmount')), dueDate: String(form.get('dueDate')), idProof: String(form.get('idProof')), status: String(form.get('status')) as TenantStatus }); onClose() }}><Field label="Tenant name"><input name="name" className={inputClass} defaultValue={tenant.name} required /></Field><Field label="Phone"><input name="phone" className={inputClass} defaultValue={tenant.phone} required /></Field><Field label="Email"><input name="email" className={inputClass} type="email" defaultValue={tenant.email} placeholder="Optional" /></Field><Field label="Room number"><select className={inputClass} value={roomId} onChange={(event) => setRoomId(event.target.value)}>{available.map((room) => <option key={room.id} value={room.id}>Room {room.number} · {tenants.filter((item) => item.roomId === room.id && item.id !== tenant.id).length}/{room.beds} occupied</option>)}</select></Field><Field label="Joining date"><input name="joiningDate" className={inputClass} type="date" defaultValue={tenant.joiningDate} /></Field><Field label="Monthly rent"><input name="monthlyRent" className={inputClass} type="number" min="0" defaultValue={tenant.monthlyRent} /></Field><Field label="Security deposit"><input name="security" className={inputClass} type="number" min="0" defaultValue={tenant.security} /></Field><Field label="Electricity option"><select name="electricity" className={inputClass} defaultValue={tenant.electricity}><option>Included</option><option>Fixed</option></select></Field><Field label="Electricity amount"><input name="electricityAmount" className={inputClass} type="number" min="0" defaultValue={tenant.electricityAmount} /></Field><Field label="Payment due date"><input name="dueDate" className={inputClass} type="date" defaultValue={tenant.dueDate} /></Field><Field label="ID proof/details"><input name="idProof" className={inputClass} defaultValue={tenant.idProof} /></Field><Field label="Status"><select name="status" className={inputClass} defaultValue={tenant.status}><option>Active</option><option>Notice</option></select></Field><div className="md:col-span-2 flex justify-end gap-2"><Button tone="soft" onClick={onClose}>Cancel</Button><Button type="submit">Save Tenant</Button></div></form></Modal>
+}
+
+function AdmitTenantModal({ rooms, tenants, onClose, onSubmit }: { rooms: Room[]; tenants: Tenant[]; onClose: () => void; onSubmit: (tenant: Omit<Tenant, 'id' | 'branchId' | 'status' | 'paidThisMonth'>) => void }) {
+  const availableRooms = rooms.filter((room) => tenants.filter((tenant) => tenant.roomId === room.id).length < room.beds && room.status !== 'Maintenance')
+  const [roomId, setRoomId] = useState(availableRooms[0]?.id || '')
+  const room = rooms.find((item) => item.id === roomId) || availableRooms[0]
+  const occupied = tenants.filter((tenant) => tenant.roomId === roomId).map((tenant) => tenant.bedNo)
+  const nextBed = Array.from({ length: room?.beds || 1 }, (_, index) => index + 1).find((bed) => !occupied.includes(bed)) || 1
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    onSubmit({ name: String(form.get('name')), phone: String(form.get('phone')), email: String(form.get('email')), roomId, bedNo: nextBed, joiningDate: String(form.get('joiningDate')), dueDate: String(form.get('dueDate') || form.get('joiningDate')), monthlyRent: Number(form.get('monthlyRent')), security: Number(form.get('security')), electricity: String(form.get('electricity')) as 'Included' | 'Fixed', electricityAmount: Number(form.get('electricityAmount') || 0), idProof: String(form.get('idProof') || 'uploaded-id-proof') })
+    onClose()
+  }
+  return <Modal title="New Tenant Admission" onClose={onClose}><form className="grid gap-4 md:grid-cols-2" onSubmit={submit}><Field label="Full name"><input name="name" className={inputClass} required /></Field><Field label="Phone"><input name="phone" className={inputClass} required /></Field><Field label="Email"><input name="email" className={inputClass} type="email" placeholder="Optional" /></Field><Field label="Room selection"><select className={inputClass} value={roomId} onChange={(event) => setRoomId(event.target.value)}>{availableRooms.map((item) => <option key={item.id} value={item.id}>Room {item.number} · bed {tenants.filter((tenant) => tenant.roomId === item.id).length + 1}/{item.beds}</option>)}</select></Field><Field label="Joining date"><input name="joiningDate" className={inputClass} type="date" defaultValue={today} /></Field><Field label="Rent Due Date / Rent Date"><input name="dueDate" className={inputClass} type="date" defaultValue={today} /></Field><Field label="Monthly rent"><input name="monthlyRent" className={inputClass} type="number" defaultValue={room?.rent || 10000} /></Field><Field label="Security deposit"><input name="security" className={inputClass} type="number" defaultValue={room?.rent || 10000} /></Field><Field label="Electricity option"><select name="electricity" className={inputClass}><option>Included</option><option>Fixed</option></select></Field><Field label="Fixed electricity amount"><input name="electricityAmount" className={inputClass} type="number" defaultValue={room?.electricityAmount || 0} /></Field><Field label="ID proof upload"><input name="idProof" className={inputClass} type="file" /></Field><div className="md:col-span-2 flex justify-end gap-2"><Button tone="soft" onClick={onClose}>Cancel</Button><Button tone="blue" type="submit">Admit Tenant</Button></div></form></Modal>
+}
+
+function PaymentModal({ tenants, selectedTenantId, onClose, onSubmit }: { tenants: Tenant[]; selectedTenantId: string; onClose: () => void; onSubmit: (tenantId: string, amount: number) => void }) {
+  const [tenantId, setTenantId] = useState(selectedTenantId || tenants[0]?.id || '')
+  const tenant = tenants.find((item) => item.id === tenantId)
+  const balance = tenant ? Math.max(0, getTenantDue(tenant) - tenant.paidThisMonth) : 0
+  const [amount, setAmount] = useState(balance)
+  return <Modal title="Add Received Payment" onClose={onClose}><form className="grid gap-4" onSubmit={(event) => { event.preventDefault(); onSubmit(tenantId, amount); onClose() }}><Field label="Tenant"><select className={inputClass} value={tenantId} onChange={(event) => { const id = event.target.value; setTenantId(id); const next = tenants.find((item) => item.id === id); setAmount(next ? Math.max(0, getTenantDue(next) - next.paidThisMonth) : 0) }}>{tenants.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field><p className="rounded-md bg-slate-50 p-3 text-sm">Current balance: <b>{money(balance)}</b></p><Field label="Amount received"><input className={inputClass} type="number" min="1" value={amount || ''} onChange={(event) => setAmount(Number(event.target.value))} /></Field><div className="flex justify-end gap-2"><Button tone="soft" onClick={onClose}>Cancel</Button><Button tone="green" type="submit">Add Payment</Button></div></form></Modal>
+}
+
+function NoticeModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (notice: NonNullable<Tenant['notice']>) => void }) {
+  return <Modal title="Issue Vacating Notice" onClose={onClose}><form className="grid gap-4" onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); onSubmit({ noticeDate: String(form.get('noticeDate')), expectedLeavingDate: String(form.get('expectedLeavingDate')), reason: String(form.get('reason')) }); onClose() }}><Field label="Notice date"><input name="noticeDate" className={inputClass} type="date" defaultValue={today} /></Field><Field label="Expected leaving date"><input name="expectedLeavingDate" className={inputClass} type="date" defaultValue="2026-06-30" /></Field><Field label="Reason"><textarea name="reason" className={inputClass} required /></Field><div className="flex justify-end gap-2"><Button tone="soft" onClick={onClose}>Cancel</Button><Button tone="blue" type="submit">Issue Notice</Button></div></form></Modal>
+}
+
+function VacateModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (left: NonNullable<Tenant['left']>) => void }) {
+  return <Modal title="Vacate Tenant" onClose={onClose}><form className="grid gap-4 md:grid-cols-2" onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); onSubmit({ leftDate: String(form.get('leftDate')), reason: String(form.get('reason')), finalRentBalance: Number(form.get('finalRentBalance')), electricityBalance: Number(form.get('electricityBalance')), maintenanceDeduction: Number(form.get('maintenanceDeduction')), securityRefund: Number(form.get('securityRefund')), finalSettlement: Number(form.get('securityRefund')) - Number(form.get('finalRentBalance')) - Number(form.get('electricityBalance')) - Number(form.get('maintenanceDeduction')) }); onClose() }}><Field label="Left date"><input name="leftDate" className={inputClass} type="date" defaultValue={today} /></Field><Field label="Reason"><input name="reason" className={inputClass} required /></Field><Field label="Final rent balance"><input name="finalRentBalance" className={inputClass} type="number" defaultValue={0} /></Field><Field label="Electricity balance"><input name="electricityBalance" className={inputClass} type="number" defaultValue={0} /></Field><Field label="Maintenance deduction"><input name="maintenanceDeduction" className={inputClass} type="number" defaultValue={0} /></Field><Field label="Security refund"><input name="securityRefund" className={inputClass} type="number" defaultValue={0} /></Field><div className="md:col-span-2 flex justify-end gap-2"><Button tone="soft" onClick={onClose}>Cancel</Button><Button tone="red" type="submit">Final Settlement</Button></div></form></Modal>
+}
+
+function ExpenseModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (expense: Omit<Expense, 'id' | 'branchId'>) => void }) {
+  return <Modal title="Add Expense" onClose={onClose}><form className="grid gap-4" onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); onSubmit({ category: String(form.get('category')) as ExpenseCategory, description: String(form.get('description')), amount: Number(form.get('amount')), date: String(form.get('date')), vendor: String(form.get('vendor')) }); onClose() }}><Field label="Category"><select name="category" className={inputClass}>{['Grocery', 'Vegetables', 'Gas Cylinder', 'Staff Salary', 'Miscellaneous'].map((item) => <option key={item}>{item}</option>)}</select></Field><Field label="Description"><input name="description" className={inputClass} required /></Field><Field label="Amount"><input name="amount" className={inputClass} type="number" required /></Field><Field label="Date"><input name="date" className={inputClass} type="date" defaultValue={today} /></Field><Field label="Vendor/note"><input name="vendor" className={inputClass} /></Field><div className="flex justify-end gap-2"><Button tone="soft" onClick={onClose}>Cancel</Button><Button tone="red" type="submit">Add Expense</Button></div></form></Modal>
+}
+
+function PurchaseModal({ items, onClose, onSubmit }: { items: InventoryItem[]; onClose: () => void; onSubmit: (payload: { mode: string; itemId: string; name: string; category: InventoryCategory; unit: string; quantity: number; unitCost: number; date: string; note: string }) => void }) {
+  const [mode, setMode] = useState('Existing Item')
+  return <Modal title="Add Stock Purchase" onClose={onClose}><form className="grid gap-4" onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); onSubmit({ mode, itemId: String(form.get('itemId') || ''), name: String(form.get('name') || ''), category: String(form.get('category') || 'Furniture') as InventoryCategory, unit: String(form.get('unit') || 'pcs'), quantity: Number(form.get('quantity')), unitCost: Number(form.get('unitCost') || 0), date: String(form.get('date')), note: String(form.get('note') || '') }); onClose() }}><Tabs values={['Existing Item', 'New Item']} value={mode} onChange={setMode} />{mode === 'Existing Item' ? <Field label="Select item"><select name="itemId" className={inputClass} required>{items.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.stock} {item.unit}</option>)}</select></Field> : <><Field label="Item name"><input name="name" className={inputClass} required /></Field><Field label="Category"><select name="category" className={inputClass}>{['Furniture', 'Linen', 'Kitchen', 'Electrical', 'Housekeeping'].map((item) => <option key={item}>{item}</option>)}</select></Field><Field label="Unit"><input name="unit" className={inputClass} defaultValue="pcs" required /></Field></>}<Field label="Quantity"><input name="quantity" className={inputClass} type="number" min="1" defaultValue={1} required /></Field><Field label="Unit cost (optional)"><input name="unitCost" className={inputClass} type="number" min="0" step="0.01" placeholder="0" /></Field><Field label="Purchase date"><input name="date" className={inputClass} type="date" defaultValue={today} required /></Field><Field label="Vendor/note"><input name="note" className={inputClass} /></Field><div className="flex justify-end gap-2"><Button tone="soft" onClick={onClose}>Cancel</Button><Button tone="green" type="submit">Add Purchase</Button></div></form></Modal>
+}
+
+function addPurchase(previous: AppData, branchId: string, payload: { mode: string; itemId: string; name: string; category: InventoryCategory; unit: string; quantity: number; unitCost: number; date: string; note: string }): AppData {
+  const itemId = payload.mode === 'New Item' ? uid('iv') : payload.itemId
+  const amount = payload.quantity * payload.unitCost
+  const purchaseId = uid('ip')
+  const expenseId = amount > 0 ? uid('e') : undefined
+  const cashbookId = amount > 0 ? uid('c') : undefined
+  return {
+    ...previous,
+    inventory: payload.mode === 'New Item'
+      ? [{ id: itemId, branchId, name: payload.name, category: payload.category, unit: payload.unit || 'pcs', stock: payload.quantity, reorderAt: 5, lastPurchase: payload.date }, ...previous.inventory]
+      : previous.inventory.map((item) => item.id === itemId ? { ...item, stock: item.stock + payload.quantity, lastPurchase: payload.date } : item),
+    purchases: [{ id: purchaseId, branchId, itemId, quantity: payload.quantity, unitCost: payload.unitCost, date: payload.date, note: payload.note, expenseId, cashbookId }, ...previous.purchases],
+    expenses: amount > 0 ? [{ id: expenseId!, branchId, category: 'Inventory', description: `Inventory purchase - ${payload.mode === 'New Item' ? payload.name : previous.inventory.find((item) => item.id === itemId)?.name}`, amount, date: payload.date, vendor: payload.note }, ...previous.expenses] : previous.expenses,
+    cashbook: amount > 0 ? [{ id: cashbookId!, branchId, type: 'Debit', amount, description: 'Inventory purchase', date: payload.date, source: 'Inventory', linkedId: purchaseId }, ...previous.cashbook] : previous.cashbook,
+  }
+}
+
+function InventoryHistoryModal({ item, purchases, isAdmin, onClose, onEdit, onDelete }: { item: InventoryItem; purchases: InventoryPurchase[]; isAdmin: boolean; onClose: () => void; onEdit: (purchase: InventoryPurchase) => void; onDelete: (purchase: InventoryPurchase) => void }) {
+  return <Modal title={`${item.name} Purchase History`} onClose={onClose}>{purchases.length ? <DataTable headers={['Date', 'Quantity', 'Unit cost', 'Total cost', 'Vendor/note', 'Actions']}>{purchases.map((purchase) => <tr key={purchase.id} className="border-t border-slate-100"><td className="p-3">{purchase.date}</td><td className="p-3">{purchase.quantity} {item.unit}</td><td className="p-3">{money(purchase.unitCost)}</td><td className="p-3 font-bold">{money(purchase.quantity * purchase.unitCost)}</td><td className="p-3">{purchase.note || '-'}</td><td className="p-3">{isAdmin && <div className="flex gap-1"><CompactAction title="Edit purchase" onClick={() => onEdit(purchase)}><Edit3 size={14} /></CompactAction><CompactAction title="Delete purchase" danger disabled={!isAdmin} onClick={() => { if (confirm('Delete this purchase and reverse its stock and finance entries?')) onDelete(purchase) }}><Trash2 size={14} /></CompactAction></div>}</td></tr>)}</DataTable> : <p className="rounded-md bg-slate-50 p-4 text-sm text-slate-500">No recorded purchases for this item yet.</p>}</Modal>
+}
+
+function EditPurchaseModal({ purchase, onClose, onSubmit }: { purchase: InventoryPurchase; onClose: () => void; onSubmit: (changes: Pick<InventoryPurchase, 'quantity' | 'unitCost' | 'date' | 'note'>) => void }) {
+  return <Modal title="Edit Inventory Purchase" onClose={onClose}><form className="grid gap-4" onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); onSubmit({ quantity: Number(form.get('quantity')), unitCost: Number(form.get('unitCost') || 0), date: String(form.get('date')), note: String(form.get('note') || '') }); onClose() }}><Field label="Quantity"><input name="quantity" className={inputClass} type="number" min="1" defaultValue={purchase.quantity} required /></Field><Field label="Unit cost"><input name="unitCost" className={inputClass} type="number" min="0" step="0.01" defaultValue={purchase.unitCost} /></Field><Field label="Purchase date"><input name="date" className={inputClass} type="date" defaultValue={purchase.date} required /></Field><Field label="Vendor/note"><input name="note" className={inputClass} defaultValue={purchase.note} /></Field><div className="flex justify-end gap-2"><Button tone="soft" onClick={onClose}>Cancel</Button><Button type="submit">Save Purchase</Button></div></form></Modal>
+}
+
+function editPurchase(previous: AppData, purchaseId: string, changes: Pick<InventoryPurchase, 'quantity' | 'unitCost' | 'date' | 'note'>): AppData {
+  const old = previous.purchases.find((purchase) => purchase.id === purchaseId)!
+  const amount = changes.quantity * changes.unitCost
+  const inventory = previous.inventory.map((item) => item.id === old.itemId ? { ...item, stock: Math.max(0, item.stock - old.quantity + changes.quantity), lastPurchase: changes.date } : item)
+  let expenses = previous.expenses.filter((expense) => expense.id !== old.expenseId)
+  let cashbook = previous.cashbook.filter((entry) => entry.id !== old.cashbookId)
+  let expenseId: string | undefined
+  let cashbookId: string | undefined
+  if (amount > 0) {
+    expenseId = uid('e'); cashbookId = uid('c')
+    expenses = [{ id: expenseId, branchId: old.branchId, category: 'Inventory', description: `Inventory purchase - ${inventory.find((item) => item.id === old.itemId)?.name}`, amount, date: changes.date, vendor: changes.note }, ...expenses]
+    cashbook = [{ id: cashbookId, branchId: old.branchId, type: 'Debit', amount, description: 'Inventory purchase', date: changes.date, source: 'Inventory', linkedId: purchaseId }, ...cashbook]
+  }
+  return { ...previous, inventory, expenses, cashbook, purchases: previous.purchases.map((purchase) => purchase.id === purchaseId ? { ...purchase, ...changes, expenseId, cashbookId } : purchase) }
+}
+
+function deletePurchase(previous: AppData, purchase: InventoryPurchase): AppData {
+  return { ...previous, inventory: previous.inventory.map((item) => item.id === purchase.itemId ? { ...item, stock: Math.max(0, item.stock - purchase.quantity) } : item), purchases: previous.purchases.filter((item) => item.id !== purchase.id), expenses: previous.expenses.filter((expense) => expense.id !== purchase.expenseId), cashbook: previous.cashbook.filter((entry) => entry.id !== purchase.cashbookId) }
+}
+
+function ResolveTicketModal({ ticket, room, onClose, onSubmit }: { ticket: MaintenanceTicket; room?: Room; onClose: () => void; onSubmit: (resolution: NonNullable<MaintenanceTicket['resolution']>, markAvailable: boolean) => void }) {
+  const [markAvailable, setMarkAvailable] = useState(room?.status === 'Maintenance')
+  return <Modal title={`Resolve: ${ticket.title}`} onClose={onClose}><form className="grid gap-4" onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); onSubmit({ date: String(form.get('date')), note: String(form.get('note')), cost: Number(form.get('cost') || 0), vendor: String(form.get('vendor') || '') }, markAvailable); onClose() }}><Field label="Resolution date"><input name="date" className={inputClass} type="date" defaultValue={today} required /></Field><Field label="Resolution note"><textarea name="note" className={inputClass} required /></Field><Field label="Repair cost optional"><input name="cost" className={inputClass} type="number" min="0" defaultValue="0" /></Field><Field label="Vendor/worker name optional"><input name="vendor" className={inputClass} /></Field>{room?.status === 'Maintenance' && <label className="flex items-center gap-2 text-sm font-semibold"><input type="checkbox" checked={markAvailable} onChange={(event) => setMarkAvailable(event.target.checked)} /> Mark room available again</label>}<div className="flex justify-end gap-2"><Button tone="soft" onClick={onClose}>Cancel</Button><Button tone="green" type="submit">Resolve Ticket</Button></div></form></Modal>
+}
+
+function CreateBranchModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (branch: Omit<Branch, 'id' | 'active'>) => void }) {
+  return <Modal title="Add New Branch" onClose={onClose}><form className="grid gap-4" onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); onSubmit({ name: String(form.get('name')), address: String(form.get('address')), floors: Number(form.get('floors') || 0), notes: String(form.get('notes') || ''), contact: String(form.get('contact') || '') }) }}><Field label="Branch name"><input name="name" className={inputClass} required /></Field><Field label="Branch address"><textarea name="address" className={inputClass} required /></Field><Field label="Total floors optional"><input name="floors" className={inputClass} type="number" min="0" /></Field><Field label="Contact number optional"><input name="contact" className={inputClass} /></Field><Field label="Notes optional"><textarea name="notes" className={inputClass} /></Field><div className="flex justify-end gap-2"><Button tone="soft" onClick={onClose}>Cancel</Button><Button type="submit">Add Branch</Button></div></form></Modal>
+}
+
+const staffPermissionOptions = [
+  ['admit_tenant', 'Can admit tenant'], ['add_payment', 'Can add payment'], ['move_tenant', 'Can move tenant'], ['vacate_tenant', 'Can vacate tenant'], ['add_cashbook', 'Can add cashbook entry'], ['add_expense', 'Can add expense'], ['add_inventory', 'Can add inventory purchase'], ['create_maintenance', 'Can create maintenance ticket'], ['resolve_maintenance', 'Can resolve maintenance ticket'], ['view_reports', 'Can view reports'],
+]
+
+function StaffModal({ user, branches, onClose, onSubmit }: { user?: User; branches: Branch[]; onClose: () => void; onSubmit: (staff: Omit<User, 'id' | 'role' | 'active'>) => void }) {
+  const [branchIds, setBranchIds] = useState<string[]>(user?.branchIds || [])
+  const [permissions, setPermissions] = useState<string[]>(user?.permissions || [])
+  const toggle = (list: string[], value: string, setter: (next: string[]) => void) => setter(list.includes(value) ? list.filter((item) => item !== value) : [...list, value])
+  return <Modal title={user ? 'Edit Staff Member' : 'Add Staff Member'} onClose={onClose}><form className="grid gap-4 md:grid-cols-2" onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); if (!branchIds.length) return; onSubmit({ name: String(form.get('name')), phone: String(form.get('phone')), email: String(form.get('email') || ''), username: String(form.get('username')), password: String(form.get('password')), branchIds, permissions }); onClose() }}><Field label="Staff name"><input name="name" className={inputClass} defaultValue={user?.name} required /></Field><Field label="Phone"><input name="phone" className={inputClass} defaultValue={user?.phone} required /></Field><Field label="Email optional"><input name="email" type="email" className={inputClass} defaultValue={user?.email} /></Field><Field label="Username/login ID"><input name="username" className={inputClass} defaultValue={user?.username} required /></Field><Field label="Password"><input name="password" className={inputClass} defaultValue={user?.password || `PG95-${Math.random().toString(36).slice(2, 8)}`} required /></Field><Field label="Role"><input className={inputClass} value="Staff" readOnly /></Field><div className="md:col-span-2"><p className="mb-2 text-sm font-semibold">Assigned branches</p><div className="grid gap-2 sm:grid-cols-2">{branches.map((branch) => <label key={branch.id} className="flex items-center gap-2 rounded-md border p-2 text-sm"><input type="checkbox" checked={branchIds.includes(branch.id)} onChange={() => toggle(branchIds, branch.id, setBranchIds)} /> {branch.name}</label>)}</div>{!branchIds.length && <p className="mt-1 text-xs text-rose-600">Select at least one branch.</p>}</div><div className="md:col-span-2"><p className="mb-2 text-sm font-semibold">Permissions</p><div className="grid gap-2 sm:grid-cols-2">{staffPermissionOptions.map(([value, label]) => <label key={value} className="flex items-center gap-2 rounded-md border p-2 text-sm"><input type="checkbox" checked={permissions.includes(value)} onChange={() => toggle(permissions, value, setPermissions)} /> {label}</label>)}</div></div><div className="md:col-span-2 flex justify-end gap-2"><Button tone="soft" onClick={onClose}>Cancel</Button><Button type="submit">{user ? 'Save Staff' : 'Add Staff'}</Button></div></form></Modal>
+}
+
+function MoveTenantModal({ tenant, rooms, tenants, onClose, onSubmit }: { tenant: Tenant; rooms: Room[]; tenants: Tenant[]; onClose: () => void; onSubmit: (roomId: string, note: string) => void }) {
+  const available = rooms.filter((room) => room.id !== tenant.roomId && room.status !== 'Maintenance' && tenants.filter((item) => item.roomId === room.id && item.status !== 'Left').length < room.beds)
+  const current = rooms.find((room) => room.id === tenant.roomId)
+  return <Modal title="Move Tenant" onClose={onClose}>{available.length ? <form className="grid gap-4" onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); onSubmit(String(form.get('roomId')), String(form.get('note') || '')); onClose() }}><div className="grid gap-3 rounded-md bg-slate-50 p-3 text-sm md:grid-cols-2"><p><b>Tenant:</b> {tenant.name}</p><p><b>Current room:</b> {current?.number}</p></div><Field label="Select new room"><select name="roomId" className={inputClass} required>{available.map((room) => <option key={room.id} value={room.id}>Room {room.number} · {tenants.filter((item) => item.roomId === room.id && item.status !== 'Left').length}/{room.beds} occupied</option>)}</select></Field><Field label="Move date (optional)"><input name="moveDate" className={inputClass} type="date" defaultValue={today} /></Field><Field label="Note/reason (optional)"><textarea name="note" className={inputClass} /></Field><div className="flex justify-end gap-2"><Button tone="soft" onClick={onClose}>Cancel</Button><Button type="submit">Confirm Move</Button></div></form> : <div><p className="rounded-md bg-orange-50 p-4 text-sm font-semibold text-orange-800">No vacant room available for moving.</p><div className="mt-4 flex justify-end"><Button tone="soft" onClick={onClose}>Close</Button></div></div>}</Modal>
+}
+
+function BranchModal({ branch, onClose, onSubmit }: { branch: Branch; onClose: () => void; onSubmit: (changes: Pick<Branch, 'name' | 'address'>) => void }) {
+  return <Modal title="Edit Branch Details" onClose={onClose}><form className="grid gap-4" onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); onSubmit({ name: String(form.get('name')), address: String(form.get('address')) }); onClose() }}><Field label="Branch name"><input name="name" className={inputClass} defaultValue={branch.name} required /></Field><Field label="Branch address"><textarea name="address" className={inputClass} defaultValue={branch.address} required /></Field><div className="flex justify-end gap-2"><Button tone="soft" onClick={onClose}>Cancel</Button><Button type="submit">Save Branch</Button></div></form></Modal>
+}
+
+function RoomModal({ room, onClose, onSubmit }: { room?: Room; onClose: () => void; onSubmit: (room: Omit<Room, 'id' | 'branchId'>) => void }) {
+  return <Modal title={room ? 'Edit Room' : 'Add Room'} onClose={onClose}><form className="grid gap-4 md:grid-cols-2" onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); onSubmit({ number: String(form.get('number')), floor: Number(form.get('floor')), type: String(form.get('type')) as RoomType, beds: Number(form.get('beds')), rent: Number(form.get('rent')), electricity: String(form.get('electricity')) as Room['electricity'], electricityAmount: Number(form.get('electricityAmount') || 0), status: String(form.get('status')) as RoomStatus, notes: String(form.get('notes') || '') }); onClose() }}><Field label="Room number"><input name="number" className={inputClass} defaultValue={room?.number} required /></Field><Field label="Floor"><input name="floor" className={inputClass} type="number" min="0" defaultValue={room?.floor || 1} required /></Field><Field label="Room type"><select name="type" className={inputClass} defaultValue={room?.type || 'Single'}>{['Single', 'Double', 'Triple', 'Suite', 'Custom'].map((type) => <option key={type}>{type}</option>)}</select></Field><Field label="Total beds/capacity"><input name="beds" className={inputClass} type="number" min="1" defaultValue={room?.beds || 1} required /></Field><Field label="Rent per month"><input name="rent" className={inputClass} type="number" min="0" defaultValue={room?.rent || 10000} required /></Field><Field label="Electricity option"><select name="electricity" className={inputClass} defaultValue={room?.electricity || 'Included'}><option>Included</option><option>Fixed</option></select></Field><Field label="Fixed electricity amount"><input name="electricityAmount" className={inputClass} type="number" min="0" defaultValue={room?.electricityAmount || 0} /></Field><Field label="Status"><select name="status" className={inputClass} defaultValue={room?.status || 'Vacant'}><option>Vacant</option><option>Occupied</option><option>Maintenance</option></select></Field><Field label="Notes optional"><textarea name="notes" className={inputClass} defaultValue={room?.notes} /></Field><div className="md:col-span-2 flex justify-end gap-2"><Button tone="soft" onClick={onClose}>Cancel</Button><Button type="submit">{room ? 'Save Room' : 'Add Room'}</Button></div></form></Modal>
+}
+
+function ConfirmModal({ title, message, onClose, onConfirm }: { title: string; message: string; onClose: () => void; onConfirm: () => void }) {
+  return <Modal title={title} onClose={onClose}><p className="text-sm text-slate-600">{message}</p><div className="mt-5 flex justify-end gap-2"><Button tone="soft" onClick={onClose}>Cancel</Button><Button tone="red" onClick={() => { onConfirm(); onClose() }}>Confirm</Button></div></Modal>
+}
+
+function TicketModal({ rooms, tenants, onClose, onSubmit }: { rooms: Room[]; tenants: Tenant[]; onClose: () => void; onSubmit: (ticket: Omit<MaintenanceTicket, 'id' | 'branchId' | 'status'>) => void }) {
+  return <Modal title="New Maintenance Request" onClose={onClose}><form className="grid gap-4" onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); onSubmit({ title: String(form.get('title')), roomId: String(form.get('roomId')), tenantId: String(form.get('tenantId') || ''), category: String(form.get('category')), priority: String(form.get('priority')) as 'Low' | 'Medium' | 'High', assignedTo: String(form.get('assignedTo')), raisedDate: String(form.get('raisedDate')), description: String(form.get('description')) }); onClose() }}><Field label="Issue title"><input name="title" className={inputClass} required /></Field><Field label="Room"><select name="roomId" className={inputClass}>{rooms.map((room) => <option key={room.id} value={room.id}>Room {room.number}</option>)}</select></Field><Field label="Tenant optional"><select name="tenantId" className={inputClass}><option value="">No tenant</option>{tenants.map((tenant) => <option key={tenant.id} value={tenant.id}>{tenant.name}</option>)}</select></Field><Field label="Category"><input name="category" className={inputClass} defaultValue="Plumbing" /></Field><Field label="Priority"><select name="priority" className={inputClass}><option>Low</option><option>Medium</option><option>High</option></select></Field><Field label="Assigned to"><input name="assignedTo" className={inputClass} /></Field><Field label="Date"><input name="raisedDate" className={inputClass} type="date" defaultValue={today} /></Field><Field label="Description"><textarea name="description" className={inputClass} /></Field><div className="flex justify-end gap-2"><Button tone="soft" onClick={onClose}>Cancel</Button><Button tone="blue" type="submit">Create Request</Button></div></form></Modal>
+}
+
+function RoomDetailsModal({ room, tenants, tickets, onClose, onAdmit, onMaintenance }: { room: Room; tenants: Tenant[]; tickets: MaintenanceTicket[]; onClose: () => void; onAdmit: () => void; onMaintenance: () => void }) {
+  return <Modal title={`Room ${room.number} Details`} onClose={onClose}><div className="grid gap-4"><div className="grid gap-3 md:grid-cols-3">{[['Floor', room.floor], ['Room type', room.type], ['Total beds', room.beds], ['Occupied beds', tenants.length], ['Vacant beds', room.beds - tenants.length], ['Rent', money(room.rent)], ['Electricity type', room.electricity], ['Maintenance status', room.status], ['Payment status', tenants.map(getPaymentStatus).join(', ') || 'No tenants']].map(([label, value]) => <div key={String(label)} className="rounded-md bg-slate-50 p-3"><p className="text-xs text-slate-500">{label}</p><p className="font-bold">{value}</p></div>)}</div><Card><h3 className="font-bold">Current tenants</h3>{tenants.map((tenant) => <p key={tenant.id} className="mt-2 text-sm">{tenant.name} · Bed {tenant.bedNo}</p>)}</Card><Card><h3 className="font-bold">Maintenance history</h3>{tickets.map((ticket) => <p key={ticket.id} className="mt-2 text-sm">{ticket.title} · {ticket.status}</p>)}</Card><div className="flex justify-end gap-2"><Button tone="blue" onClick={onAdmit}>Admit tenant to vacant bed</Button><Button tone="red" onClick={onMaintenance}>Mark room maintenance</Button></div></div></Modal>
+}
+
+function downloadText(filename: string, text: string) {
+  const blob = new Blob([text], { type: 'text/plain' })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  anchor.click()
+  URL.revokeObjectURL(url)
+}
+
+export default App

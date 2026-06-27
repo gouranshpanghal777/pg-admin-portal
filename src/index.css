@@ -1,0 +1,77 @@
+@import "tailwindcss";
+
+:root {
+  color: #172033;
+  background: #f7f3ec;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 12mm;
+  }
+
+  html,
+  body,
+  #root {
+    width: 100%;
+    min-width: 0;
+    background: white !important;
+  }
+
+  body * {
+    visibility: hidden;
+  }
+
+  .print-surface,
+  .print-surface * {
+    visibility: visible;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .print-surface {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    min-height: 0;
+    padding: 8mm !important;
+    color: #111827 !important;
+    background: white !important;
+    box-shadow: none !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+  }
+
+  .invoice-layout {
+    display: block !important;
+  }
+
+  .invoice-sheet {
+    font-size: 11pt;
+  }
+}
