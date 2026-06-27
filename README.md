@@ -1,32 +1,71 @@
-# React + TypeScript + Vite
+# PG 95 Admin Portal
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+React, TypeScript, Tailwind CSS, and Supabase-based branch-wise PG administration.
 
-Currently, two official plugins are available:
+## Supabase tables
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- `profiles`
+- `staff_members`
+- `branches`
+- `branch_assignments`
+- `staff_permissions`
+- `rooms`
+- `tenants`
+- `payments`
+- `cashbook_entries`
+- `expenses`
+- `inventory_items`
+- `inventory_purchases`
+- `maintenance_tickets`
+- `invoices`
+- `activity_logs`
 
-## React Compiler
+All business tables use Row Level Security. Admins can access every branch. Staff reads are limited to `branch_assignments`, and writes additionally require the corresponding `staff_permissions` row.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## First-time Supabase setup
 
-## Expanding the Oxlint configuration
+1. Open Supabase Dashboard > SQL Editor.
+2. Run `supabase/migrations/202606270001_pg_admin_schema.sql`.
+3. Open Authentication > Users and create the owner email/password.
+4. Replace `OWNER_EMAIL_HERE` in `supabase/seed-admin.sql`, then run that SQL once.
+5. Install the Supabase CLI and link the project:
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npx supabase login
+npx supabase link --project-ref YOUR_PROJECT_REF
+npx supabase functions deploy create-staff
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+The `SUPABASE_SERVICE_ROLE_KEY` used by `create-staff` is supplied automatically inside Supabase Edge Functions. Never add it to Vite or Vercel.
+
+## Local environment
+
+Copy `.env.example` to `.env` and set:
+
+```env
+VITE_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+VITE_SUPABASE_ANON_KEY=YOUR_SUPABASE_ANON_PUBLIC_KEY
+```
+
+The URL must be the project base URL, not a URL ending in `/rest/v1/`. The app normalizes either form, but the canonical value is recommended.
+
+```bash
+npm install
+npm run dev
+npm run build
+```
+
+## Vercel deployment
+
+1. In Vercel > Project > Settings > Environment Variables, add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` for Production, Preview, and Development.
+2. In Supabase > Authentication > URL Configuration, set Site URL to the Vercel production URL and add the Vercel preview URL pattern as a redirect URL.
+3. Deploy the SQL migration and `create-staff` Edge Function before the Vercel build.
+4. Push the committed branch. Vercel will build with `npm run build`.
+5. Sign in as the owner, create a branch, then create staff accounts and assign their branch permissions in Settings.
+
+## Security notes
+
+- Only the anon public key is used in the browser.
+- Staff Auth users are provisioned by the authenticated admin through the Edge Function.
+- The service-role key never enters the frontend bundle.
+- RLS is the enforcement layer; hidden UI buttons are only a usability layer.

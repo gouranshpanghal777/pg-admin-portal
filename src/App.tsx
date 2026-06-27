@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
+import type { Session } from '@supabase/supabase-js'
+import { supabase, supabaseConfigured } from './lib/supabase'
+import { createStaffAccount, deactivateStaffAccount, loadAppData, persistAppData } from './lib/database'
 import {
   AlertTriangle,
   Bell,
@@ -50,7 +53,7 @@ import {
   YAxis,
 } from 'recharts'
 
-type Role = 'Admin' | 'Staff'
+export type Role = 'Admin' | 'Staff'
 type Page =
   | 'Dashboard'
   | 'Tenants'
@@ -77,9 +80,9 @@ type ExpenseCategory =
   | 'Maintenance'
 type TicketStatus = 'Open' | 'In Progress' | 'Resolved'
 
-type Branch = { id: string; name: string; address: string; active?: boolean; floors?: number; notes?: string; contact?: string }
-type User = { id: string; name: string; role: Role; branchIds: string[]; permissions: string[]; phone?: string; email?: string; username?: string; password?: string; active?: boolean }
-type Room = {
+export type Branch = { id: string; name: string; address: string; active?: boolean; floors?: number; notes?: string; contact?: string }
+export type User = { id: string; name: string; role: Role; branchIds: string[]; permissions: string[]; phone?: string; email?: string; username?: string; password?: string; active?: boolean }
+export type Room = {
   id: string
   branchId: string
   number: string
@@ -92,7 +95,7 @@ type Room = {
   status: RoomStatus
   notes?: string
 }
-type Tenant = {
+export type Tenant = {
   id: string
   branchId: string
   name: string
@@ -120,7 +123,7 @@ type Tenant = {
     finalSettlement: number
   }
 }
-type Payment = {
+export type Payment = {
   id: string
   branchId: string
   tenantId: string
@@ -130,7 +133,7 @@ type Payment = {
   status: 'Received' | 'Partial'
   invoiceId: string
 }
-type CashbookEntry = {
+export type CashbookEntry = {
   id: string
   branchId: string
   type: EntryType
@@ -140,7 +143,7 @@ type CashbookEntry = {
   source: 'Manual' | 'Payment' | 'Expense' | 'Inventory' | 'Maintenance'
   linkedId?: string
 }
-type Expense = {
+export type Expense = {
   id: string
   branchId: string
   category: ExpenseCategory
@@ -149,7 +152,7 @@ type Expense = {
   date: string
   vendor?: string
 }
-type InventoryItem = {
+export type InventoryItem = {
   id: string
   branchId: string
   name: string
@@ -159,7 +162,7 @@ type InventoryItem = {
   reorderAt: number
   lastPurchase: string
 }
-type InventoryPurchase = {
+export type InventoryPurchase = {
   id: string
   branchId: string
   itemId: string
@@ -170,7 +173,7 @@ type InventoryPurchase = {
   expenseId?: string
   cashbookId?: string
 }
-type MaintenanceTicket = {
+export type MaintenanceTicket = {
   id: string
   branchId: string
   title: string
@@ -184,7 +187,7 @@ type MaintenanceTicket = {
   description: string
   resolution?: { date: string; note: string; cost: number; vendor: string }
 }
-type Invoice = {
+export type Invoice = {
   id: string
   branchId: string
   tenantId: string
@@ -192,7 +195,7 @@ type Invoice = {
   period: string
   createdAt: string
 }
-type ActivityLog = {
+export type ActivityLog = {
   id: string
   branchId: string
   userId: string
@@ -207,8 +210,9 @@ type ActivityLog = {
   actionType: string
   description: string
   metadata?: Record<string, string | number>
+  userName: string
 }
-type AppData = {
+export type AppData = {
   branches: Branch[]
   users: User[]
   tenants: Tenant[]
@@ -228,83 +232,19 @@ const currentMonth = '2026-06'
 const money = (value: number) => `₹${value.toLocaleString('en-IN')}`
 const formatDate = (value?: string) => value ? value.slice(0, 10).split('-').reverse().join('/') : '-'
 const formatDateTime = (value: string) => new Intl.DateTimeFormat('en-GB', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value))
-const uid = (prefix: string) => `${prefix}-${Math.random().toString(36).slice(2, 8)}`
+const uid = (_prefix: string) => crypto.randomUUID()
 const daysUntil = (date: string) =>
   Math.ceil((new Date(`${date}T00:00:00`).getTime() - new Date(`${today}T00:00:00`).getTime()) / 86400000)
 
 function logActivity(data: AppData, input: { userName: string; userId: string; userRole: Role; branchId: string; branchName: string; module: string; actionType: string; description: string; metadata?: Record<string, string | number> }): AppData {
   const log: ActivityLog = {
     id: uid('log'), branchId: input.branchId, branchName: input.branchName, userId: input.userId, role: input.userRole,
-    action: input.actionType, entity: input.module, module: input.module, actionType: input.actionType,
+    action: input.actionType, entity: input.module, module: input.module, actionType: input.actionType, userName: input.userName,
     description: input.description, metadata: input.metadata, at: new Date().toISOString(), oldValue: '', newValue: '',
   }
   return { ...data, activityLogs: [log, ...data.activityLogs] }
 }
 
-const initialData: AppData = {
-  branches: [
-    { id: 'b1', name: 'PG 95 - Sector 45', address: 'Plot 95, Sector 45, Gurugram' },
-    { id: 'b2', name: 'PG 95 - Cyber City', address: 'DLF Phase 2, Gurugram' },
-    { id: 'b3', name: 'PG 95 - Noida 62', address: 'Block C, Sector 62, Noida' },
-  ],
-  users: [
-    { id: 'u1', name: 'Aarav Admin', role: 'Admin', branchIds: ['b1', 'b2', 'b3'], permissions: ['all'], active: true },
-    { id: 'u2', name: 'Maya Staff', role: 'Staff', branchIds: ['b1'], permissions: ['admit_tenant', 'add_payment', 'move_tenant', 'vacate_tenant', 'add_cashbook', 'add_expense', 'add_inventory', 'create_maintenance', 'resolve_maintenance', 'view_reports'], phone: '9876509999', email: '', username: 'maya.staff', active: true },
-  ],
-  rooms: [
-    { id: 'r101', branchId: 'b1', number: '101', floor: 1, type: 'Single', beds: 1, rent: 15000, electricity: 'Included', electricityAmount: 0, status: 'Occupied' },
-    { id: 'r102', branchId: 'b1', number: '102', floor: 1, type: 'Double', beds: 2, rent: 11000, electricity: 'Fixed', electricityAmount: 900, status: 'Occupied' },
-    { id: 'r201', branchId: 'b1', number: '201', floor: 2, type: 'Triple', beds: 3, rent: 9000, electricity: 'Fixed', electricityAmount: 700, status: 'Occupied' },
-    { id: 'r202', branchId: 'b1', number: '202', floor: 2, type: 'Suite', beds: 1, rent: 22000, electricity: 'Included', electricityAmount: 0, status: 'Vacant' },
-    { id: 'r301', branchId: 'b1', number: '301', floor: 3, type: 'Double', beds: 2, rent: 12500, electricity: 'Fixed', electricityAmount: 800, status: 'Maintenance' },
-    { id: 'r401', branchId: 'b2', number: '401', floor: 1, type: 'Single', beds: 1, rent: 18000, electricity: 'Included', electricityAmount: 0, status: 'Occupied' },
-    { id: 'r402', branchId: 'b2', number: '402', floor: 1, type: 'Double', beds: 2, rent: 13000, electricity: 'Fixed', electricityAmount: 1000, status: 'Vacant' },
-    { id: 'r501', branchId: 'b3', number: '501', floor: 1, type: 'Triple', beds: 3, rent: 8500, electricity: 'Fixed', electricityAmount: 600, status: 'Occupied' },
-  ],
-  tenants: [
-    { id: 't1', branchId: 'b1', name: 'Riya Sharma', phone: '9876543210', email: 'riya@mail.com', roomId: 'r101', bedNo: 1, monthlyRent: 15000, security: 15000, electricity: 'Included', electricityAmount: 0, joiningDate: '2025-11-08', status: 'Active', idProof: 'aadhaar-riya.pdf', paidThisMonth: 15000, dueDate: '2026-06-30' },
-    { id: 't2', branchId: 'b1', name: 'Neha Verma', phone: '9876500011', email: 'neha@mail.com', roomId: 'r102', bedNo: 1, monthlyRent: 11000, security: 11000, electricity: 'Fixed', electricityAmount: 900, joiningDate: '2026-01-12', status: 'Notice', idProof: 'pan-neha.jpg', paidThisMonth: 5000, dueDate: '2026-06-24', notice: { noticeDate: '2026-06-10', expectedLeavingDate: '2026-06-30', reason: 'Office relocation' } },
-    { id: 't3', branchId: 'b1', name: 'Kavya Rao', phone: '9876500022', email: 'kavya@mail.com', roomId: 'r102', bedNo: 2, monthlyRent: 11000, security: 11000, electricity: 'Fixed', electricityAmount: 900, joiningDate: '2026-02-01', status: 'Active', idProof: 'aadhaar-kavya.pdf', paidThisMonth: 0, dueDate: '2026-06-27' },
-    { id: 't4', branchId: 'b1', name: 'Ananya Iyer', phone: '9876500033', email: 'ananya@mail.com', roomId: 'r201', bedNo: 1, monthlyRent: 9000, security: 9000, electricity: 'Fixed', electricityAmount: 700, joiningDate: '2026-03-15', status: 'Active', idProof: 'dl-ananya.pdf', paidThisMonth: 9000, dueDate: '2026-07-01' },
-    { id: 't5', branchId: 'b1', name: 'Pooja Singh', phone: '9876500044', email: 'pooja@mail.com', roomId: 'r201', bedNo: 2, monthlyRent: 9000, security: 9000, electricity: 'Fixed', electricityAmount: 700, joiningDate: '2025-09-03', status: 'Left', idProof: 'aadhaar-pooja.pdf', paidThisMonth: 9000, dueDate: '2026-05-25', left: { leftDate: '2026-06-02', reason: 'Completed internship', finalRentBalance: 0, electricityBalance: 300, maintenanceDeduction: 500, securityRefund: 8200, finalSettlement: 8200 } },
-    { id: 't6', branchId: 'b2', name: 'Meera Khan', phone: '9988776611', email: 'meera@mail.com', roomId: 'r401', bedNo: 1, monthlyRent: 18000, security: 18000, electricity: 'Included', electricityAmount: 0, joiningDate: '2026-04-01', status: 'Active', idProof: 'aadhaar-meera.pdf', paidThisMonth: 18000, dueDate: '2026-07-01' },
-    { id: 't7', branchId: 'b3', name: 'Tara Bose', phone: '9988776622', email: 'tara@mail.com', roomId: 'r501', bedNo: 1, monthlyRent: 8500, security: 8500, electricity: 'Fixed', electricityAmount: 600, joiningDate: '2026-05-05', status: 'Active', idProof: 'aadhaar-tara.pdf', paidThisMonth: 4000, dueDate: '2026-06-20' },
-  ],
-  payments: [
-    { id: 'p1', branchId: 'b1', tenantId: 't1', amount: 15000, date: '2026-06-03', month: currentMonth, status: 'Received', invoiceId: 'i1' },
-    { id: 'p2', branchId: 'b1', tenantId: 't2', amount: 5000, date: '2026-06-09', month: currentMonth, status: 'Partial', invoiceId: 'i2' },
-    { id: 'p3', branchId: 'b1', tenantId: 't4', amount: 9000, date: '2026-06-06', month: currentMonth, status: 'Received', invoiceId: 'i3' },
-    { id: 'p4', branchId: 'b2', tenantId: 't6', amount: 18000, date: '2026-06-03', month: currentMonth, status: 'Received', invoiceId: 'i4' },
-  ],
-  cashbook: [
-    { id: 'c1', branchId: 'b1', type: 'Credit', amount: 15000, description: 'Rent received - Riya Sharma', date: '2026-06-03', source: 'Payment' },
-    { id: 'c2', branchId: 'b1', type: 'Credit', amount: 5000, description: 'Partial rent - Neha Verma', date: '2026-06-09', source: 'Payment' },
-    { id: 'c3', branchId: 'b1', type: 'Credit', amount: 9000, description: 'Rent received - Ananya Iyer', date: '2026-06-06', source: 'Payment' },
-    { id: 'c4', branchId: 'b1', type: 'Debit', amount: 7800, description: 'Grocery purchase', date: '2026-06-08', source: 'Expense' },
-    { id: 'c5', branchId: 'b2', type: 'Credit', amount: 18000, description: 'Rent received - Meera Khan', date: '2026-06-03', source: 'Payment' },
-  ],
-  expenses: [
-    { id: 'e1', branchId: 'b1', category: 'Grocery', description: 'Monthly pantry refill', amount: 7800, date: '2026-06-08', vendor: 'Metro Cash' },
-  ],
-  inventory: [
-    { id: 'iv1', branchId: 'b1', name: 'Mattress', category: 'Furniture', stock: 4, unit: 'pcs', reorderAt: 3, lastPurchase: '2026-05-12' },
-    { id: 'iv2', branchId: 'b1', name: 'Bed Sheet', category: 'Linen', stock: 8, unit: 'pcs', reorderAt: 10, lastPurchase: '2026-06-02' },
-    { id: 'iv3', branchId: 'b1', name: 'LED Bulb', category: 'Electrical', stock: 12, unit: 'pcs', reorderAt: 8, lastPurchase: '2026-06-05' },
-    { id: 'iv4', branchId: 'b2', name: 'Dinner Plate', category: 'Kitchen', stock: 16, unit: 'pcs', reorderAt: 12, lastPurchase: '2026-05-20' },
-  ],
-  purchases: [],
-  tickets: [
-    { id: 'm1', branchId: 'b1', title: 'AC not cooling', status: 'Open', roomId: 'r102', tenantId: 't2', category: 'Electrical', priority: 'High', raisedDate: '2026-06-25', assignedTo: 'CoolCare Vendor', description: 'AC service required before month end.' },
-    { id: 'm2', branchId: 'b1', title: 'Bathroom tap leakage', status: 'In Progress', roomId: 'r301', category: 'Plumbing', priority: 'Medium', raisedDate: '2026-06-22', assignedTo: 'Ramesh Plumber', description: 'Room marked under maintenance.' },
-  ],
-  invoices: [
-    { id: 'i1', branchId: 'b1', tenantId: 't1', number: 'PG95-202606-001', period: 'June 2026', createdAt: '2026-06-03' },
-    { id: 'i2', branchId: 'b1', tenantId: 't2', number: 'PG95-202606-002', period: 'June 2026', createdAt: '2026-06-09' },
-    { id: 'i3', branchId: 'b1', tenantId: 't4', number: 'PG95-202606-003', period: 'June 2026', createdAt: '2026-06-06' },
-    { id: 'i4', branchId: 'b2', tenantId: 't6', number: 'PG95-202606-004', period: 'June 2026', createdAt: '2026-06-03' },
-  ],
-  activityLogs: [],
-}
 
 function getTenantDue(tenant: Tenant) {
   return tenant.monthlyRent + (tenant.electricity === 'Fixed' ? tenant.electricityAmount : 0)
@@ -408,8 +348,28 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 
 const inputClass = 'min-h-10 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100'
 
+function LoadingScreen({ label }: { label: string }) {
+  return <main className="grid min-h-screen place-items-center bg-[#f7f3ec]"><div className="text-center"><div className="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-blue-600" /><p className="mt-4 font-semibold text-slate-600">{label}</p></div></main>
+}
+
+function SetupScreen({ message }: { message: string }) {
+  return <main className="grid min-h-screen place-items-center bg-[#f7f3ec] p-4"><Card className="max-w-lg"><h1 className="text-xl font-black">Supabase setup required</h1><p className="mt-2 text-sm text-slate-600">{message}</p><p className="mt-3 text-sm">Run the migration in <b>supabase/migrations</b>, create the owner Auth user, and promote it with <b>supabase/seed-admin.sql</b>.</p><Button tone="soft" onClick={() => supabase.auth.signOut()}><LogOut size={16} /> Sign Out</Button></Card></main>
+}
+
+function LoginPage() {
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  return <main className="grid min-h-screen place-items-center bg-[#f7f3ec] p-4"><Card className="w-full max-w-md"><div className="mb-6 flex items-center gap-3"><div className="grid h-12 w-12 place-items-center rounded-md bg-blue-600 text-lg font-black text-white">95</div><div><h1 className="text-2xl font-black">PG Admin Portal</h1><p className="text-sm text-slate-500">Admin and staff sign in</p></div></div><form className="grid gap-4" onSubmit={async (event) => { event.preventDefault(); setBusy(true); setError(''); const loginEmail = email.includes('@') ? email : `${email}@staff.pg95.local`; const result = await supabase.auth.signInWithPassword({ email: loginEmail, password }); if (result.error) setError(result.error.message); setBusy(false) }}><Field label="Email or username"><input className={inputClass} required value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="username" /></Field><Field label="Password"><input className={inputClass} type="password" required value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" /></Field>{error && <p className="rounded-md bg-rose-50 p-3 text-sm text-rose-700">{error}</p>}<Button type="submit" disabled={busy}>{busy ? 'Signing in...' : 'Sign In'}</Button></form></Card></main>
+}
+
 function App() {
-  const [data, setData] = useState<AppData>(initialData)
+  const [data, setData] = useState<AppData>({ branches: [], users: [], tenants: [], rooms: [], payments: [], cashbook: [], expenses: [], inventory: [], purchases: [], tickets: [], invoices: [], activityLogs: [] })
+  const [session, setSession] = useState<Session | null>(null)
+  const [authLoading, setAuthLoading] = useState(true)
+  const [dataLoading, setDataLoading] = useState(false)
+  const [backendError, setBackendError] = useState('')
   const [branchId, setBranchId] = useState<string>('')
   const [page, setPage] = useState<Page>('Dashboard')
   const [role, setRole] = useState<Role>('Admin')
@@ -430,12 +390,24 @@ function App() {
   const [inventoryFilter, setInventoryFilter] = useState('All')
   const [ticketFilter, setTicketFilter] = useState('All')
   const [reportRange, setReportRange] = useState('Monthly Summary')
-  const currentUser = data.users.find((user) => user.role === role)!
-  const branch = data.branches.find((item) => item.id === branchId)
-  const scoped = useMemo(() => branchId ? branchData(data, branchId) : undefined, [data, branchId])
+  const currentUser: User = data.users.find((user) => user.id === session?.user.id) || { id: session?.user.id || '', name: session?.user.user_metadata?.name || 'User', role, branchIds: [], permissions: [] }
   const isAdmin = role === 'Admin'
   const can = (permission: string) => isAdmin || currentUser.permissions.includes(permission)
+  const branch = data.branches.find((item) => item.id === branchId && (isAdmin || currentUser.branchIds.includes(item.id)))
+  const scoped = useMemo(() => branch ? branchData(data, branch.id) : undefined, [data, branch])
   const visibleBranches = data.branches.filter((item) => item.active !== false && (isAdmin || currentUser.branchIds.includes(item.id)))
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: result }) => { setSession(result.session); setAuthLoading(false) })
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, next) => { setSession(next); setAuthLoading(false) })
+    return () => listener.subscription.unsubscribe()
+  }, [])
+
+  useEffect(() => {
+    if (!session) { setData({ branches: [], users: [], tenants: [], rooms: [], payments: [], cashbook: [], expenses: [], inventory: [], purchases: [], tickets: [], invoices: [], activityLogs: [] }); return }
+    setDataLoading(true); setBackendError('')
+    loadAppData().then(async (next) => { const profile = next.users.find((user) => user.id === session.user.id); if (profile) setRole(profile.role); const loginBranch = next.branches.find((item) => profile?.role === 'Admin' || profile?.branchIds.includes(item.id)); const logged = profile && loginBranch ? logActivity(next, { userName: profile.name, userId: profile.id, userRole: profile.role, branchId: loginBranch.id, branchName: loginBranch.name, module: 'Authentication', actionType: 'Login', description: `${profile.role} ${profile.name} logged in.` }) : next; setData(logged); if (logged !== next) await persistAppData(next, logged, session.user.id) }).catch((error) => setBackendError(error instanceof Error ? error.message : 'Unable to load Supabase data')).finally(() => setDataLoading(false))
+  }, [session])
 
   useEffect(() => {
     if (branchId && !isAdmin && !currentUser.branchIds.includes(branchId)) setBranchId('')
@@ -454,9 +426,17 @@ function App() {
     if (!isAdmin && /^(edit|delete)/i.test(action)) return
     setData((previous) => {
       const next = refreshRoomStatuses(updater(previous))
-      return logActivity(next, { userName: currentUser.name, userId: currentUser.id, userRole: role, branchId, branchName: branch?.name || '', module: entity, actionType: action, description: description || `${currentUser.role} ${currentUser.name} performed ${action.toLowerCase()} in ${entity}.`, metadata })
+      const logged = logActivity(next, { userName: currentUser.name, userId: currentUser.id, userRole: role, branchId, branchName: branch?.name || '', module: entity, actionType: action, description: description || `${currentUser.role} ${currentUser.name} performed ${action.toLowerCase()} in ${entity}.`, metadata })
+      void persistAppData(previous, logged, currentUser.id).catch((error) => { setBackendError(error instanceof Error ? error.message : 'Supabase update failed'); setData(previous) })
+      return logged
     })
   }
+
+  if (authLoading) return <LoadingScreen label="Checking your session..." />
+  if (!supabaseConfigured) return <SetupScreen message="Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to continue." />
+  if (!session) return <LoginPage />
+  if (dataLoading) return <LoadingScreen label="Loading PG data..." />
+  if (backendError && !data.branches.length) return <SetupScreen message={backendError} />
 
   if (!branchId) {
     return (
@@ -465,7 +445,7 @@ function App() {
           <div className="mb-8 text-center">
             <h1 className="text-4xl font-black text-slate-950">PG Admin Portal</h1>
             <p className="mt-2 text-lg text-slate-600">Select a branch to continue</p>
-            <div className="mt-4 flex justify-center gap-2"><button onClick={() => setRole(role === 'Admin' ? 'Staff' : 'Admin')} className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-bold"><ShieldCheck className="mr-1 inline" size={16} /> {role}</button>{isAdmin && <Button tone="blue" onClick={() => setModal('addBranch')}><Plus size={16} /> Add Branch</Button>}</div>
+            <div className="mt-4 flex justify-center gap-2"><Button tone="soft" onClick={() => supabase.auth.signOut()}><LogOut size={16} /> Sign Out</Button>{isAdmin && <Button tone="blue" onClick={() => setModal('addBranch')}><Plus size={16} /> Add Branch</Button>}</div>
           </div>
           <div className="grid gap-4 md:grid-cols-3">
             {visibleBranches.map((item) => {
@@ -483,9 +463,10 @@ function App() {
               )
             })}
           </div>
+          {!visibleBranches.length && <Card className="mt-4 text-center"><Building2 className="mx-auto text-slate-400" /><p className="mt-2 font-semibold">{isAdmin ? 'No active branches yet. Add your first branch to begin.' : 'No branches are assigned to your staff account.'}</p></Card>}
           {isAdmin && data.branches.some((item) => item.active === false) && <p className="mt-6 text-center text-sm text-slate-500">Deactivated branches can be restored from Settings.</p>}
         </div>
-        {modal === 'addBranch' && <CreateBranchModal onClose={() => setModal('')} onSubmit={(nextBranch) => { const id = uid('b'); setData((previous) => logActivity({ ...previous, branches: [...previous.branches, { id, active: true, ...nextBranch }], users: previous.users.map((user) => user.role === 'Admin' ? { ...user, branchIds: [...user.branchIds, id] } : user) }, { userName: currentUser.name, userId: currentUser.id, userRole: role, branchId: id, branchName: nextBranch.name, module: 'Branches', actionType: 'Add Branch', description: `${role} ${currentUser.name} added new branch ${nextBranch.name}.` })); setModal('') }} />}
+        {modal === 'addBranch' && <CreateBranchModal onClose={() => setModal('')} onSubmit={(nextBranch) => { const id = uid('b'); setData((previous) => { const next = logActivity({ ...previous, branches: [...previous.branches, { id, active: true, ...nextBranch }] }, { userName: currentUser.name, userId: currentUser.id, userRole: role, branchId: id, branchName: nextBranch.name, module: 'Branches', actionType: 'Add Branch', description: `${role} ${currentUser.name} added new branch ${nextBranch.name}.` }); void persistAppData(previous, next, currentUser.id).catch((error) => { setBackendError(error instanceof Error ? error.message : 'Unable to add branch'); setData(previous) }); return next }); setModal('') }} />}
       </main>
     )
   }
@@ -520,7 +501,12 @@ function App() {
   ] as { label: Page | 'Switch Branch' | 'Sign Out'; icon: ReactNode }[]).filter((item) => (isAdmin || item.label !== 'Settings') && (item.label !== 'Reports' || can('view_reports')))
   const handleNav = (label: Page | 'Switch Branch' | 'Sign Out') => {
     setMobileNav(false)
-    if (label === 'Switch Branch' || label === 'Sign Out') {
+    if (label === 'Sign Out') {
+      void supabase.auth.signOut()
+      setBranchId('')
+      return
+    }
+    if (label === 'Switch Branch') {
       setBranchId('')
       return
     }
@@ -578,11 +564,12 @@ function App() {
             <div className="relative">
               <button onClick={() => setModal('notifications')} className="relative rounded-md border border-slate-200 bg-white p-2"><Bell size={20} />{notifications.length > 0 && <span className="absolute -right-1 -top-1 rounded-full bg-rose-600 px-1.5 text-xs font-bold text-white">{notifications.length}</span>}</button>
             </div>
-            <button onClick={() => setRole(role === 'Admin' ? 'Staff' : 'Admin')} className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-bold"><ShieldCheck className="mr-1 inline" size={16} /> {role}</button>
+            <button className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-bold"><ShieldCheck className="mr-1 inline" size={16} /> {currentUser.name} · {role}</button>
           </div>
         </header>
 
         <main className="p-4 lg:p-6">
+          {backendError && <div className="mb-4 flex items-center justify-between gap-3 rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700"><span>{backendError}</span><button aria-label="Dismiss error" onClick={() => setBackendError('')}><X size={16} /></button></div>}
           {page === 'Dashboard' && <Dashboard scoped={scoped} setModal={setModal} setPage={setPage} setTenantTab={setTenantTab} setTenantFilter={setTenantFilter} setRoomFloor={setRoomFloor} setFinanceTab={setFinanceTab} setPaymentFilter={setPaymentFilter} setTicketFilter={setTicketFilter} />}
           {page === 'Tenants' && <TenantsPage data={data} scoped={scoped} tenantTab={tenantTab} setTenantTab={setTenantTab} filter={tenantFilter} setFilter={setTenantFilter} setModal={setModal} setSelectedTenantId={setSelectedTenantId} isAdmin={isAdmin} canAction={can} />}
           {page === 'Rooms' && <RoomsPage scoped={scoped} roomFloor={roomFloor} setRoomFloor={setRoomFloor} setSelectedRoomId={setSelectedRoomId} setModal={setModal} isAdmin={isAdmin} />}
@@ -591,7 +578,7 @@ function App() {
           {page === 'Inventory' && <InventoryPage scoped={scoped} filter={inventoryFilter} setFilter={setInventoryFilter} setModal={setModal} setSelectedInventoryId={setSelectedInventoryId} canAdd={can('add_inventory')} />}
           {page === 'Maintenance' && <MaintenancePage data={data} scoped={scoped} filter={ticketFilter} setFilter={setTicketFilter} setModal={setModal} setSelectedTicketId={setSelectedTicketId} canResolve={can('resolve_maintenance')} canCreate={can('create_maintenance')} />}
           {page === 'Reports' && <ReportsPage scoped={scoped} data={data} branch={branch} reportRange={reportRange} setReportRange={setReportRange} />}
-          {page === 'Settings' && isAdmin && <SettingsPage data={data} branch={branch} role={role} isAdmin={isAdmin} setModal={setModal} setSelectedUserId={setSelectedUserId} onDeactivateUser={(user) => updateData((previous) => ({ ...previous, users: previous.users.map((item) => item.id === user.id ? { ...item, active: false } : item) }), 'Deactivate Staff', 'Staff', `${role} ${currentUser.name} deactivated staff ${user.name}.`)} onToggleBranch={(item, active) => updateData((previous) => ({ ...previous, branches: previous.branches.map((candidate) => candidate.id === item.id ? { ...candidate, active } : candidate) }), active ? 'Reactivate Branch' : 'Deactivate Branch', 'Branches', `${role} ${currentUser.name} ${active ? 'reactivated' : 'deactivated'} branch ${item.name}.`)} />}
+          {page === 'Settings' && isAdmin && <SettingsPage data={data} branch={branch} role={role} isAdmin={isAdmin} setModal={setModal} setSelectedUserId={setSelectedUserId} onDeactivateUser={async (user) => { try { await deactivateStaffAccount(user.id); const refreshed = await loadAppData(); const next = logActivity(refreshed, { userName: currentUser.name, userId: currentUser.id, userRole: role, branchId, branchName: branch.name, module: 'Staff', actionType: 'Deactivate Staff', description: `${role} ${currentUser.name} deactivated staff ${user.name}.` }); await persistAppData(refreshed, next, currentUser.id); setData(next) } catch (error) { setBackendError(error instanceof Error ? error.message : 'Unable to deactivate staff') } }} onToggleBranch={(item, active) => updateData((previous) => ({ ...previous, branches: previous.branches.map((candidate) => candidate.id === item.id ? { ...candidate, active } : candidate) }), active ? 'Reactivate Branch' : 'Deactivate Branch', 'Branches', `${role} ${currentUser.name} ${active ? 'reactivated' : 'deactivated'} branch ${item.name}.`)} />}
         </main>
       </div>
 
@@ -614,8 +601,8 @@ function App() {
       {modal === 'editTenant' && <EditTenantModal tenant={data.tenants.find((tenant) => tenant.id === selectedTenantId)!} rooms={scoped.rooms} tenants={scoped.activeTenants} onClose={() => setModal('')} onSubmit={(changes) => { const tenant = data.tenants.find((item) => item.id === selectedTenantId)!; updateData((previous) => ({ ...previous, tenants: previous.tenants.map((item) => item.id === selectedTenantId ? { ...item, ...changes } : item) }), 'Edit Tenant', 'Tenants', `${role} ${currentUser.name} edited tenant ${tenant.name} details. Changed room from ${data.rooms.find((room) => room.id === tenant.roomId)?.number} to ${data.rooms.find((room) => room.id === changes.roomId)?.number}, rent from ${money(tenant.monthlyRent)} to ${money(changes.monthlyRent || 0)}.`) }} />}
       {modal === 'moveTenant' && <MoveTenantModal tenant={data.tenants.find((tenant) => tenant.id === selectedTenantId)!} rooms={scoped.rooms} tenants={scoped.activeTenants} onClose={() => setModal('')} onSubmit={(roomId, note) => { const tenant = data.tenants.find((item) => item.id === selectedTenantId)!; updateData((previous) => ({ ...previous, tenants: previous.tenants.map((item) => item.id === selectedTenantId ? { ...item, roomId, bedNo: previous.tenants.filter((other) => other.roomId === roomId && other.status !== 'Left').length + 1 } : item) }), 'Move Tenant', 'Tenants', `${role} ${currentUser.name} moved tenant ${tenant.name} from Room ${data.rooms.find((room) => room.id === tenant.roomId)?.number} to Room ${data.rooms.find((room) => room.id === roomId)?.number} on ${formatDate(today)}.${note ? ` Reason: ${note}.` : ''}`) }} />}
       {modal === 'editBranch' && <BranchModal branch={branch} onClose={() => setModal('')} onSubmit={(changes) => updateData((previous) => ({ ...previous, branches: previous.branches.map((item) => item.id === branchId ? { ...item, ...changes } : item) }), 'Edit Branch', 'Branches', `${role} ${currentUser.name} changed branch name from ${branch.name} to ${changes.name}. Address changed from ${branch.address} to ${changes.address}.`)} />}
-      {modal === 'addStaff' && <StaffModal branches={data.branches.filter((item) => item.active !== false)} onClose={() => setModal('')} onSubmit={(staff) => updateData((previous) => ({ ...previous, users: [...previous.users, { id: uid('u'), role: 'Staff', active: true, ...staff }] }), 'Add Staff', 'Staff', `${role} ${currentUser.name} added staff ${staff.name} and assigned branch ${staff.branchIds.map((id) => data.branches.find((item) => item.id === id)?.name).join(' and ')}.`)} />}
-      {modal === 'editStaff' && <StaffModal user={data.users.find((user) => user.id === selectedUserId)} branches={data.branches.filter((item) => item.active !== false)} onClose={() => setModal('')} onSubmit={(staff) => { const old = data.users.find((user) => user.id === selectedUserId)!; updateData((previous) => ({ ...previous, users: previous.users.map((user) => user.id === selectedUserId ? { ...user, ...staff } : user) }), 'Change Staff Access', 'Staff', `${role} ${currentUser.name} assigned staff ${old.name} to ${staff.branchIds.map((id) => data.branches.find((item) => item.id === id)?.name).join(' and ')}.`) }} />}
+      {modal === 'addStaff' && <StaffModal branches={data.branches.filter((item) => item.active !== false)} onClose={() => setModal('')} onSubmit={async (staff) => { try { await createStaffAccount(staff); const refreshed = await loadAppData(); const next = logActivity(refreshed, { userName: currentUser.name, userId: currentUser.id, userRole: role, branchId, branchName: branch.name, module: 'Staff', actionType: 'Add Staff', description: `${role} ${currentUser.name} added staff ${staff.name} and assigned ${staff.branchIds.map((id) => data.branches.find((item) => item.id === id)?.name).join(' and ')}.` }); await persistAppData(refreshed, next, currentUser.id); setData(next) } catch (error) { setBackendError(error instanceof Error ? error.message : 'Unable to create staff') } }} />}
+      {modal === 'editStaff' && <StaffModal user={data.users.find((user) => user.id === selectedUserId)} branches={data.branches.filter((item) => item.active !== false)} onClose={() => setModal('')} onSubmit={async (staff) => { try { await createStaffAccount({ id: selectedUserId, ...staff }); const refreshed = await loadAppData(); const next = logActivity(refreshed, { userName: currentUser.name, userId: currentUser.id, userRole: role, branchId, branchName: branch.name, module: 'Staff', actionType: 'Change Staff Access', description: `${role} ${currentUser.name} assigned staff ${staff.name} to ${staff.branchIds.map((id) => data.branches.find((item) => item.id === id)?.name).join(' and ')}.` }); await persistAppData(refreshed, next, currentUser.id); setData(next) } catch (error) { setBackendError(error instanceof Error ? error.message : 'Unable to update staff') } }} />}
       {modal === 'expense' && <ExpenseModal onClose={() => setModal('')} onSubmit={(expense) => updateData((previous) => ({ ...previous, expenses: [{ id: uid('e'), branchId, ...expense }, ...previous.expenses], cashbook: [{ id: uid('c'), branchId, type: 'Debit', amount: expense.amount, description: expense.description, date: expense.date, source: 'Expense' }, ...previous.cashbook] }), 'Add Expense', 'Finance', `${role} ${currentUser.name} added expense of ${money(expense.amount)} under ${expense.category}. Vendor/Note: ${expense.vendor || '-'}.`)} />}
       {modal === 'purchase' && <PurchaseModal items={scoped.inventory} onClose={() => setModal('')} onSubmit={(payload) => { const itemName = payload.mode === 'New Item' ? payload.name : data.inventory.find((item) => item.id === payload.itemId)?.name; updateData((previous) => addPurchase(previous, branchId, payload), 'Add Purchase', 'Inventory', `${role} ${currentUser.name} added inventory purchase: ${itemName}, Qty ${payload.quantity}, Unit cost ${money(payload.unitCost)}, Total ${money(payload.quantity * payload.unitCost)}.`) }} />}
       {modal === 'inventoryHistory' && <InventoryHistoryModal item={data.inventory.find((item) => item.id === selectedInventoryId)!} purchases={scoped.purchases.filter((purchase) => purchase.itemId === selectedInventoryId)} isAdmin={isAdmin} onClose={() => setModal('')} onEdit={(purchase) => { setSelectedCashbookId(purchase.id); setModal('editPurchase') }} onDelete={(purchase) => updateData((previous) => deletePurchase(previous, purchase), 'Delete inventory purchase', 'inventory_purchases')} />}
