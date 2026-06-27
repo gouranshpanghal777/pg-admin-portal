@@ -7,6 +7,9 @@ const status = (tenant) => {
   if (balance === 0) return 'Paid'
   return daysUntil(tenant.dueDate) < 0 ? 'Overdue' : 'Pending'
 }
+const paymentTotal = (payments, branchId, month, paymentType) => payments
+  .filter((payment) => payment.branchId === branchId && payment.month === month && (!paymentType || payment.paymentType === paymentType))
+  .reduce((sum, payment) => sum + payment.amount, 0)
 const summarize = (data, branchId) => {
   const tenants = data.tenants.filter((tenant) => tenant.branchId === branchId && tenant.status !== 'Left')
   const rooms = data.rooms.filter((room) => room.branchId === branchId)
@@ -52,15 +55,22 @@ selectedBranch = ''
 assert(selectedBranch === '', '2. Switch Branch returns to branch page')
 selectedBranch = 'b1'
 
-const tenant = { id: 'new', branchId: selectedBranch, name: 'Flow Tenant', roomId: 'r1', monthlyRent: 12000, electricity: 'Fixed', electricityAmount: 800, paidThisMonth: 0, dueDate: '2026-06-30', status: 'Active', notice: null }
+const tenant = { id: 'new', branchId: selectedBranch, name: 'Flow Tenant', roomId: 'r1', monthlyRent: 12000, security: 2500, electricity: 'Fixed', electricityAmount: 800, paidThisMonth: 0, dueDate: '2026-06-30', status: 'Active', notice: null }
 data.tenants.push(tenant)
 data.rooms = data.rooms.map((room) => room.id === 'r1' ? { ...room, status: 'Occupied' } : room)
 assert(data.tenants.some((item) => item.id === 'new') && summarize(data, selectedBranch).occupancy > 0, '3. Admit tenant updates tenants, rooms, dashboard')
 
-data.payments.push({ id: uid('p'), branchId: selectedBranch, tenantId: 'new', amount: 8000 })
+data.payments.push({ id: uid('p'), branchId: selectedBranch, tenantId: 'new', paymentType: 'Rent', amount: 8000, month: '2026-06' })
 tenant.paidThisMonth += 8000
 data.cashbook.push({ id: uid('c'), branchId: selectedBranch, type: 'Credit', amount: 8000 })
 assert(due(tenant) - tenant.paidThisMonth === 4800 && summarize(data, selectedBranch).revenue === 8000, '4-5. Payment reduces balance, partial remains, cashbook credit updates revenue')
+
+data.payments.push({ id: uid('p'), branchId: selectedBranch, tenantId: 'new', paymentType: 'Security Deposit', amount: 1000, month: '2026-06' })
+data.payments.push({ id: uid('p'), branchId: selectedBranch, tenantId: 'new', paymentType: 'Security Deposit', amount: 1500, month: '2026-06' })
+data.cashbook.push({ id: uid('c'), branchId: selectedBranch, type: 'Credit', amount: 2500, description: 'Security deposit received — Flow Tenant (Room 101)' })
+const securityReceived = data.payments.filter((payment) => payment.tenantId === tenant.id && payment.paymentType === 'Security Deposit').reduce((sum, payment) => sum + payment.amount, 0)
+assert(securityReceived === tenant.security && paymentTotal(data.payments, selectedBranch, '2026-06', 'Rent') === 8000, '4a. Security supports partial collection and remains separate from rent')
+assert(paymentTotal(data.payments, selectedBranch, '2026-06', 'Security Deposit') === 2500 && summarize(data, selectedBranch).revenue === 10500, '4b. Security collection updates monthly total and cashbook credit')
 
 assert(status(data.tenants.find((item) => item.id === 'old')) === 'Overdue' && summarize(data, selectedBranch).overdue === 1, '6. Overdue status and alert source exist')
 
@@ -72,6 +82,7 @@ tenant.left = { leftDate: today, reason: 'Relocation', finalSettlement: 5000 }
 tenant.status = 'Left'
 data.rooms = data.rooms.map((room) => room.id === 'r1' ? { ...room, status: 'Vacant' } : room)
 assert(data.tenants.some((item) => item.id === 'new' && item.status === 'Left') && data.rooms.find((room) => room.id === 'r1').status === 'Vacant', '7. Vacate tenant moves to Left PG and frees room')
+assert(paymentTotal(data.payments, selectedBranch, '2026-06') === 10500 && data.payments.filter((payment) => payment.tenantId === tenant.id).length === 3, '7a. Vacating preserves monthly payment totals and history')
 
 data.expenses.push({ id: uid('e'), branchId: selectedBranch, category: 'Grocery', amount: 1000 })
 data.cashbook.push({ id: uid('c'), branchId: selectedBranch, type: 'Debit', amount: 1000 })
@@ -92,7 +103,7 @@ data.invoices.push({ id: uid('i'), branchId: selectedBranch, tenantId: 'old', nu
 assert(data.invoices.some((invoice) => invoice.number === 'PG95-TEST'), '13. Invoice record is generated')
 
 const report = summarize(data, selectedBranch)
-assert(report.revenue === 8000 && report.expenses === 1500, '14. Monthly report totals derive from entries')
+assert(report.revenue === 10500 && report.expenses === 1500, '14. Monthly report totals derive from rent, security, and other entries')
 
 const canEditFinancial = (role) => role === 'Admin'
 assert(canEditFinancial('Staff') === false, '15. Staff login edit/delete restrictions enforced')

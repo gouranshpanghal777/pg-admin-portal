@@ -76,7 +76,8 @@ create table public.invoices (
 create table public.payments (
   id uuid primary key default gen_random_uuid(), branch_id uuid not null references public.branches(id) on delete cascade,
   tenant_id uuid not null references public.tenants(id), amount numeric(12,2) not null check (amount > 0), payment_date date not null,
-  month text not null, status text not null, payment_mode text not null default 'Cash', invoice_id uuid references public.invoices(id),
+  month text not null, status text not null, payment_type text not null default 'Rent', payment_mode text not null default 'Cash',
+  description text, invoice_id uuid references public.invoices(id),
   created_by uuid references public.profiles(id), created_at timestamptz not null default now()
 );
 
