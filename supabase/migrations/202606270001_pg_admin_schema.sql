@@ -62,7 +62,10 @@ create table public.rooms (
 create table public.tenants (
   id uuid primary key default gen_random_uuid(), branch_id uuid not null references public.branches(id) on delete cascade,
   name text not null, phone text not null, email text, room_id uuid not null references public.rooms(id), bed_no integer not null default 1,
-  monthly_rent numeric(12,2) not null, security numeric(12,2) not null default 0, electricity text not null default 'Included',
+  monthly_rent numeric(12,2) not null, security numeric(12,2) not null default 0,
+  security_received numeric(12,2) not null default 0,
+  security_balance numeric(12,2) generated always as (greatest(security - security_received, 0)) stored,
+  electricity text not null default 'Included',
   electricity_amount numeric(12,2) not null default 0, joining_date date not null, due_date date not null, status text not null default 'Active',
   id_proof text, paid_this_month numeric(12,2) not null default 0, notice jsonb, left_details jsonb,
   created_by uuid references public.profiles(id), updated_by uuid references public.profiles(id), created_at timestamptz not null default now(), updated_at timestamptz not null default now()
@@ -76,7 +79,7 @@ create table public.invoices (
 create table public.payments (
   id uuid primary key default gen_random_uuid(), branch_id uuid not null references public.branches(id) on delete cascade,
   tenant_id uuid not null references public.tenants(id), amount numeric(12,2) not null check (amount > 0), payment_date date not null,
-  month text not null, status text not null, payment_type text not null default 'Rent', payment_mode text not null default 'Cash',
+  month text not null, status text not null, payment_type text not null default 'rent', payment_mode text not null default 'Cash',
   description text, invoice_id uuid references public.invoices(id),
   created_by uuid references public.profiles(id), created_at timestamptz not null default now()
 );

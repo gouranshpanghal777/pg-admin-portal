@@ -55,22 +55,23 @@ selectedBranch = ''
 assert(selectedBranch === '', '2. Switch Branch returns to branch page')
 selectedBranch = 'b1'
 
-const tenant = { id: 'new', branchId: selectedBranch, name: 'Flow Tenant', roomId: 'r1', monthlyRent: 12000, security: 2500, electricity: 'Fixed', electricityAmount: 800, paidThisMonth: 0, dueDate: '2026-06-30', status: 'Active', notice: null }
+const tenant = { id: 'new', branchId: selectedBranch, name: 'Flow Tenant', roomId: 'r1', monthlyRent: 6500, security: 2500, securityReceived: 0, electricity: 'Included', electricityAmount: 0, paidThisMonth: 0, dueDate: '2026-06-30', status: 'Active', notice: null }
 data.tenants.push(tenant)
 data.rooms = data.rooms.map((room) => room.id === 'r1' ? { ...room, status: 'Occupied' } : room)
 assert(data.tenants.some((item) => item.id === 'new') && summarize(data, selectedBranch).occupancy > 0, '3. Admit tenant updates tenants, rooms, dashboard')
 
-data.payments.push({ id: uid('p'), branchId: selectedBranch, tenantId: 'new', paymentType: 'Rent', amount: 8000, month: '2026-06' })
-tenant.paidThisMonth += 8000
-data.cashbook.push({ id: uid('c'), branchId: selectedBranch, type: 'Credit', amount: 8000 })
-assert(due(tenant) - tenant.paidThisMonth === 4800 && summarize(data, selectedBranch).revenue === 8000, '4-5. Payment reduces balance, partial remains, cashbook credit updates revenue')
-
-data.payments.push({ id: uid('p'), branchId: selectedBranch, tenantId: 'new', paymentType: 'Security Deposit', amount: 1000, month: '2026-06' })
-data.payments.push({ id: uid('p'), branchId: selectedBranch, tenantId: 'new', paymentType: 'Security Deposit', amount: 1500, month: '2026-06' })
-data.cashbook.push({ id: uid('c'), branchId: selectedBranch, type: 'Credit', amount: 2500, description: 'Security deposit received — Flow Tenant (Room 101)' })
+// Model the atomic record_split_payment RPC: two payment rows, two credits, separate tenant aggregates.
+data.payments.push({ id: uid('p'), branchId: selectedBranch, tenantId: 'new', paymentType: 'Rent', amount: 6000, month: '2026-06' })
+data.payments.push({ id: uid('p'), branchId: selectedBranch, tenantId: 'new', paymentType: 'Security Deposit', amount: 2000, month: '2026-06' })
+data.cashbook.push({ id: uid('c'), branchId: selectedBranch, type: 'Credit', amount: 6000, description: 'Rent collected — Flow Tenant (Room 101)' })
+data.cashbook.push({ id: uid('c'), branchId: selectedBranch, type: 'Credit', amount: 2000, description: 'Security deposit received — Flow Tenant (Room 101)' })
+tenant.paidThisMonth += 6000
+tenant.securityReceived += 2000
 const securityReceived = data.payments.filter((payment) => payment.tenantId === tenant.id && payment.paymentType === 'Security Deposit').reduce((sum, payment) => sum + payment.amount, 0)
-assert(securityReceived === tenant.security && paymentTotal(data.payments, selectedBranch, '2026-06', 'Rent') === 8000, '4a. Security supports partial collection and remains separate from rent')
-assert(paymentTotal(data.payments, selectedBranch, '2026-06', 'Security Deposit') === 2500 && summarize(data, selectedBranch).revenue === 10500, '4b. Security collection updates monthly total and cashbook credit')
+assert(data.payments.length === 2 && data.cashbook.length === 2, '4. Combined submit creates two payment rows and two cashbook credits')
+assert(due(tenant) - tenant.paidThisMonth === 500 && tenant.security - tenant.securityReceived === 500, '5. Rent and security balances remain independently ₹500')
+assert(securityReceived === 2000 && paymentTotal(data.payments, selectedBranch, '2026-06', 'Rent') === 6000, '5a. Reload-shaped payment rows preserve split totals')
+assert(paymentTotal(data.payments, selectedBranch, '2026-06', 'Security Deposit') === 2000 && summarize(data, selectedBranch).revenue === 8000, '5b. Monthly collection and cashbook total ₹8000')
 
 assert(status(data.tenants.find((item) => item.id === 'old')) === 'Overdue' && summarize(data, selectedBranch).overdue === 1, '6. Overdue status and alert source exist')
 
@@ -82,7 +83,7 @@ tenant.left = { leftDate: today, reason: 'Relocation', finalSettlement: 5000 }
 tenant.status = 'Left'
 data.rooms = data.rooms.map((room) => room.id === 'r1' ? { ...room, status: 'Vacant' } : room)
 assert(data.tenants.some((item) => item.id === 'new' && item.status === 'Left') && data.rooms.find((room) => room.id === 'r1').status === 'Vacant', '7. Vacate tenant moves to Left PG and frees room')
-assert(paymentTotal(data.payments, selectedBranch, '2026-06') === 10500 && data.payments.filter((payment) => payment.tenantId === tenant.id).length === 3, '7a. Vacating preserves monthly payment totals and history')
+assert(paymentTotal(data.payments, selectedBranch, '2026-06') === 8000 && data.payments.filter((payment) => payment.tenantId === tenant.id).length === 2, '7a. Vacating preserves the ₹8000 monthly total and both payment rows')
 
 data.expenses.push({ id: uid('e'), branchId: selectedBranch, category: 'Grocery', amount: 1000 })
 data.cashbook.push({ id: uid('c'), branchId: selectedBranch, type: 'Debit', amount: 1000 })
@@ -103,7 +104,7 @@ data.invoices.push({ id: uid('i'), branchId: selectedBranch, tenantId: 'old', nu
 assert(data.invoices.some((invoice) => invoice.number === 'PG95-TEST'), '13. Invoice record is generated')
 
 const report = summarize(data, selectedBranch)
-assert(report.revenue === 10500 && report.expenses === 1500, '14. Monthly report totals derive from rent, security, and other entries')
+assert(report.revenue === 8000 && report.expenses === 1500, '14. Monthly report totals derive from rent, security, and other entries')
 
 const canEditFinancial = (role) => role === 'Admin'
 assert(canEditFinancial('Staff') === false, '15. Staff login edit/delete restrictions enforced')

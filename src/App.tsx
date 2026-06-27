@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase, supabaseConfigured } from './lib/supabase'
-import { createStaffAccount, deactivateStaffAccount, loadAppData, persistAppData } from './lib/database'
+import { createStaffAccount, deactivateStaffAccount, loadAppData, persistAppData, recordSplitPayment } from './lib/database'
 import {
   AlertTriangle,
   Bell,
@@ -105,6 +105,8 @@ export type Tenant = {
   bedNo: number
   monthlyRent: number
   security: number
+  securityReceived: number
+  securityBalance: number
   electricity: 'Included' | 'Fixed'
   electricityAmount: number
   joiningDate: string
@@ -591,19 +593,18 @@ function App() {
 
       {modal === 'cashbook' && <CashbookModal onClose={() => setModal('')} onSubmit={(entry) => updateData((previous) => ({ ...previous, cashbook: [{ id: uid('c'), branchId, source: 'Manual', ...entry }, ...previous.cashbook] }), `Add ${entry.type}`, 'Cashbook', `${role} ${currentUser.name} added cashbook ${entry.type.toLowerCase()} of ${money(entry.amount)}. Description: ${entry.description}.`, { amount: entry.amount, type: entry.type })} />}
       {modal === 'editCashbook' && <CashbookModal entry={data.cashbook.find((entry) => entry.id === selectedCashbookId)} onClose={() => setModal('')} onSubmit={(entry) => { const old = data.cashbook.find((item) => item.id === selectedCashbookId)!; updateData((previous) => ({ ...previous, cashbook: previous.cashbook.map((item) => item.id === selectedCashbookId ? { ...item, ...entry } : item) }), 'Edit Entry', 'Cashbook', `${role} ${currentUser.name} edited cashbook entry ${old.description}. Amount changed from ${money(old.amount)} to ${money(entry.amount)}; type ${old.type} to ${entry.type}.`) }} />}
-      {modal === 'admit' && <AdmitTenantModal rooms={scoped.rooms} tenants={scoped.activeTenants} onClose={() => setModal('')} onSubmit={(tenant) => updateData((previous) => ({ ...previous, tenants: [{ id: uid('t'), branchId, status: 'Active', paidThisMonth: 0, ...tenant }, ...previous.tenants] }), 'Admit Tenant', 'Tenants', `${role} ${currentUser.name} admitted tenant ${tenant.name} to Room ${data.rooms.find((room) => room.id === tenant.roomId)?.number}. Joining date: ${formatDate(tenant.joiningDate)}. Rent: ${money(tenant.monthlyRent)}.`, { tenant: tenant.name })} />}
-      {modal === 'payment' && <PaymentModal tenants={scoped.activeTenants} payments={scoped.payments} selectedTenantId={selectedTenantId} onClose={() => setModal('')} onSubmit={(tenantId, amount, paymentType, paymentMode, description) => {
-        const tenant = data.tenants.find((item) => item.id === tenantId)!
-        const room = data.rooms.find((item) => item.id === tenant.roomId)!
-        const invoiceId = paymentType === 'Rent' ? uid('i') : ''
-        const cashDescription = paymentType === 'Security Deposit' ? `Security deposit received — ${tenant.name} (Room ${room.number})` : paymentType === 'Rent' ? `Rent collected — ${tenant.name} (Room ${room.number})` : `${paymentType} received — ${tenant.name} (Room ${room.number})`
-        updateData((previous) => ({
-          ...previous,
-          tenants: paymentType === 'Rent' ? previous.tenants.map((item) => item.id === tenantId ? { ...item, paidThisMonth: item.paidThisMonth + amount } : item) : previous.tenants,
-          payments: [{ id: uid('p'), branchId, tenantId, amount, date: today, month: currentMonth, status: paymentType === 'Rent' && amount < Math.max(0, getTenantDue(tenant) - tenant.paidThisMonth) ? 'Partial' : 'Received', invoiceId, paymentType, paymentMode, description }, ...previous.payments],
-          cashbook: [{ id: uid('c'), branchId, type: 'Credit', amount, description: cashDescription, date: today, source: 'Payment' }, ...previous.cashbook],
-          invoices: paymentType === 'Rent' ? [{ id: invoiceId, branchId, tenantId, number: `PG95-${Date.now().toString().slice(-6)}`, period: 'June 2026', createdAt: today }, ...previous.invoices] : previous.invoices,
-        }), 'Add Payment', 'Payments', paymentType === 'Security Deposit' ? `${role} ${currentUser.name} received ${money(amount)} security deposit from ${tenant.name}, Room ${room.number}.` : `${role} ${currentUser.name} added ${paymentType.toLowerCase()} payment of ${money(amount)} for tenant ${tenant.name}, Room ${room.number}. Payment mode: ${paymentMode}.`, { tenant: tenant.name, amount, paymentType })
+      {modal === 'admit' && <AdmitTenantModal rooms={scoped.rooms} tenants={scoped.activeTenants} onClose={() => setModal('')} onSubmit={(tenant) => updateData((previous) => ({ ...previous, tenants: [{ id: uid('t'), branchId, status: 'Active', paidThisMonth: 0, securityReceived: 0, securityBalance: tenant.security, ...tenant }, ...previous.tenants] }), 'Admit Tenant', 'Tenants', `${role} ${currentUser.name} admitted tenant ${tenant.name} to Room ${data.rooms.find((room) => room.id === tenant.roomId)?.number}. Joining date: ${formatDate(tenant.joiningDate)}. Rent: ${money(tenant.monthlyRent)}.`, { tenant: tenant.name })} />}
+      {modal === 'payment' && <PaymentModal tenants={scoped.activeTenants} payments={scoped.payments} selectedTenantId={selectedTenantId} onClose={() => setModal('')} onSubmit={async (payment) => {
+        setBackendError('')
+        try {
+          await recordSplitPayment({ ...payment, branchId, paymentDate: today })
+          setData(await loadAppData())
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Supabase record_split_payment RPC failed'
+          console.error('Payment save failed:', error)
+          setBackendError(message)
+          throw error
+        }
       }} />}
       {modal === 'notice' && <NoticeModal onClose={() => setModal('')} onSubmit={(notice) => updateData((previous) => ({ ...previous, tenants: previous.tenants.map((tenant) => tenant.id === selectedTenantId ? { ...tenant, status: 'Notice', notice } : tenant) }), 'Issue tenant notice', 'tenants')} />}
       {modal === 'vacate' && <VacateModal onClose={() => setModal('')} onSubmit={(left) => { const tenant = data.tenants.find((item) => item.id === selectedTenantId)!; updateData((previous) => ({ ...previous, tenants: previous.tenants.map((item) => item.id === selectedTenantId ? { ...item, status: 'Left', left } : item) }), 'Vacate Tenant', 'Tenants', `${role} ${currentUser.name} vacated tenant ${tenant.name} from Room ${data.rooms.find((room) => room.id === tenant.roomId)?.number}. Left date: ${formatDate(left.leftDate)}. Reason: ${left.reason}. Exit balance: ${money(left.finalRentBalance + left.electricityBalance + left.maintenanceDeduction)}.`) }} />}
@@ -784,7 +785,7 @@ function EditTenantModal({ tenant, rooms, tenants, onClose, onSubmit }: { tenant
   return <Modal title="Edit Tenant" onClose={onClose}><form className="grid gap-4 md:grid-cols-2" onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); const room = rooms.find((item) => item.id === roomId)!; const occupants = tenants.filter((item) => item.roomId === roomId && item.id !== tenant.id); onSubmit({ name: String(form.get('name')), phone: String(form.get('phone')), email: String(form.get('email') || ''), roomId, bedNo: roomId === tenant.roomId ? tenant.bedNo : Math.min(occupants.length + 1, room.beds), joiningDate: String(form.get('joiningDate')), monthlyRent: Number(form.get('monthlyRent')), security: Number(form.get('security')), electricity: String(form.get('electricity')) as Tenant['electricity'], electricityAmount: Number(form.get('electricityAmount')), dueDate: String(form.get('dueDate')), idProof: String(form.get('idProof')), status: String(form.get('status')) as TenantStatus }); onClose() }}><Field label="Tenant name"><input name="name" className={inputClass} defaultValue={tenant.name} required /></Field><Field label="Phone"><input name="phone" className={inputClass} defaultValue={tenant.phone} required /></Field><Field label="Email"><input name="email" className={inputClass} type="email" defaultValue={tenant.email} placeholder="Optional" /></Field><Field label="Room number"><select className={inputClass} value={roomId} onChange={(event) => setRoomId(event.target.value)}>{available.map((room) => <option key={room.id} value={room.id}>Room {room.number} · {tenants.filter((item) => item.roomId === room.id && item.id !== tenant.id).length}/{room.beds} occupied</option>)}</select></Field><Field label="Joining date"><input name="joiningDate" className={inputClass} type="date" defaultValue={tenant.joiningDate} /></Field><Field label="Monthly rent"><input name="monthlyRent" className={inputClass} type="number" min="0" defaultValue={tenant.monthlyRent} /></Field><Field label="Security deposit"><input name="security" className={inputClass} type="number" min="0" defaultValue={tenant.security} /></Field><Field label="Electricity option"><select name="electricity" className={inputClass} defaultValue={tenant.electricity}><option>Included</option><option>Fixed</option></select></Field><Field label="Electricity amount"><input name="electricityAmount" className={inputClass} type="number" min="0" defaultValue={tenant.electricityAmount} /></Field><Field label="Payment due date"><input name="dueDate" className={inputClass} type="date" defaultValue={tenant.dueDate} /></Field><Field label="ID proof/details"><input name="idProof" className={inputClass} defaultValue={tenant.idProof} /></Field><Field label="Status"><select name="status" className={inputClass} defaultValue={tenant.status}><option>Active</option><option>Notice</option></select></Field><div className="md:col-span-2 flex justify-end gap-2"><Button tone="soft" onClick={onClose}>Cancel</Button><Button type="submit">Save Tenant</Button></div></form></Modal>
 }
 
-function AdmitTenantModal({ rooms, tenants, onClose, onSubmit }: { rooms: Room[]; tenants: Tenant[]; onClose: () => void; onSubmit: (tenant: Omit<Tenant, 'id' | 'branchId' | 'status' | 'paidThisMonth'>) => void }) {
+function AdmitTenantModal({ rooms, tenants, onClose, onSubmit }: { rooms: Room[]; tenants: Tenant[]; onClose: () => void; onSubmit: (tenant: Omit<Tenant, 'id' | 'branchId' | 'status' | 'paidThisMonth' | 'securityReceived' | 'securityBalance'>) => void }) {
   const availableRooms = rooms.filter((room) => tenants.filter((tenant) => tenant.roomId === room.id).length < room.beds && room.status !== 'Maintenance')
   const [roomId, setRoomId] = useState(availableRooms[0]?.id || '')
   const room = rooms.find((item) => item.id === roomId) || availableRooms[0]
@@ -799,17 +800,37 @@ function AdmitTenantModal({ rooms, tenants, onClose, onSubmit }: { rooms: Room[]
   return <Modal title="New Tenant Admission" onClose={onClose}><form className="grid gap-4 md:grid-cols-2" onSubmit={submit}><Field label="Full name"><input name="name" className={inputClass} required /></Field><Field label="Phone"><input name="phone" className={inputClass} required /></Field><Field label="Email"><input name="email" className={inputClass} type="email" placeholder="Optional" /></Field><Field label="Room selection"><select className={inputClass} value={roomId} onChange={(event) => setRoomId(event.target.value)}>{availableRooms.map((item) => <option key={item.id} value={item.id}>Room {item.number} · bed {tenants.filter((tenant) => tenant.roomId === item.id).length + 1}/{item.beds}</option>)}</select></Field><Field label="Joining date"><input name="joiningDate" className={inputClass} type="date" defaultValue={today} /></Field><Field label="Rent Due Date / Rent Date"><input name="dueDate" className={inputClass} type="date" defaultValue={today} /></Field><Field label="Monthly rent"><input name="monthlyRent" className={inputClass} type="number" defaultValue={room?.rent || 10000} /></Field><Field label="Security deposit"><input name="security" className={inputClass} type="number" defaultValue={room?.rent || 10000} /></Field><Field label="Electricity option"><select name="electricity" className={inputClass}><option>Included</option><option>Fixed</option></select></Field><Field label="Fixed electricity amount"><input name="electricityAmount" className={inputClass} type="number" defaultValue={room?.electricityAmount || 0} /></Field><Field label="ID proof upload"><input name="idProof" className={inputClass} type="file" /></Field><div className="md:col-span-2 flex justify-end gap-2"><Button tone="soft" onClick={onClose}>Cancel</Button><Button tone="blue" type="submit">Admit Tenant</Button></div></form></Modal>
 }
 
-function PaymentModal({ tenants, payments, selectedTenantId, onClose, onSubmit }: { tenants: Tenant[]; payments: Payment[]; selectedTenantId: string; onClose: () => void; onSubmit: (tenantId: string, amount: number, paymentType: Payment['paymentType'], paymentMode: string, description: string) => void }) {
+type SplitPaymentInput = { tenantId: string; rentAmount: number; securityAmount: number; electricityAmount: number; otherAmount: number; paymentMode: string; description: string }
+
+function PaymentModal({ tenants, payments, selectedTenantId, onClose, onSubmit }: { tenants: Tenant[]; payments: Payment[]; selectedTenantId: string; onClose: () => void; onSubmit: (payment: SplitPaymentInput) => Promise<void> }) {
   const [tenantId, setTenantId] = useState(selectedTenantId || tenants[0]?.id || '')
-  const [paymentType, setPaymentType] = useState<Payment['paymentType']>('Rent')
   const [paymentMode, setPaymentMode] = useState('Cash')
+  const [rentAmount, setRentAmount] = useState(0)
+  const [securityAmount, setSecurityAmount] = useState(0)
+  const [electricityAmount, setElectricityAmount] = useState(0)
+  const [otherAmount, setOtherAmount] = useState(0)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
   const tenant = tenants.find((item) => item.id === tenantId)
   const rentBalance = tenant ? Math.max(0, tenant.monthlyRent - tenant.paidThisMonth) : 0
-  const securityReceived = tenant ? paymentTotal(payments, 'Security Deposit', tenant.id, null) : 0
+  const securityReceived = tenant ? Math.max(tenant.securityReceived || 0, paymentTotal(payments, 'Security Deposit', tenant.id, null)) : 0
   const securityBalance = tenant ? Math.max(0, tenant.security - securityReceived) : 0
-  const suggested = paymentType === 'Security Deposit' ? securityBalance : paymentType === 'Rent' ? rentBalance : paymentType === 'Electricity' ? tenant?.electricityAmount || 0 : 0
-  const [amount, setAmount] = useState(rentBalance)
-  return <Modal title="Add Received Payment" onClose={onClose}><form className="grid gap-4" onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); onSubmit(tenantId, amount, paymentType, paymentMode, String(form.get('description') || '')); onClose() }}><Field label="Tenant"><select className={inputClass} value={tenantId} onChange={(event) => { const id = event.target.value; setTenantId(id); const next = tenants.find((item) => item.id === id); setAmount(next ? Math.max(0, next.monthlyRent - next.paidThisMonth) : 0) }}>{tenants.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field><Field label="Payment Type"><select className={inputClass} value={paymentType} onChange={(event) => { const type = event.target.value as Payment['paymentType']; setPaymentType(type); const nextSecurity = tenant ? Math.max(0, tenant.security - paymentTotal(payments, 'Security Deposit', tenant.id, null)) : 0; setAmount(type === 'Security Deposit' ? nextSecurity : type === 'Rent' ? rentBalance : type === 'Electricity' ? tenant?.electricityAmount || 0 : 0) }}><option>Rent</option><option>Security Deposit</option><option>Electricity</option><option>Other</option></select></Field>{paymentType === 'Security Deposit' && <div className="grid grid-cols-3 gap-2 rounded-md bg-slate-50 p-3 text-sm"><p>Security<br /><b>{money(tenant?.security || 0)}</b></p><p>Received<br /><b className="text-emerald-700">{money(securityReceived)}</b></p><p>Balance<br /><b className="text-rose-700">{money(securityBalance)}</b></p></div>}{paymentType === 'Rent' && <p className="rounded-md bg-slate-50 p-3 text-sm">Rent balance: <b>{money(rentBalance)}</b></p>}<Field label="Payment mode"><select className={inputClass} value={paymentMode} onChange={(event) => setPaymentMode(event.target.value)}><option>Cash</option><option>UPI</option><option>Bank Transfer</option><option>Card</option></select></Field><Field label="Amount received"><input className={inputClass} type="number" min="1" max={paymentType === 'Security Deposit' ? securityBalance || undefined : undefined} value={amount || ''} placeholder={String(suggested)} onChange={(event) => setAmount(Number(event.target.value))} required /></Field><Field label="Description/source optional"><input name="description" className={inputClass} /></Field><div className="flex justify-end gap-2"><Button tone="soft" onClick={onClose}>Cancel</Button><Button tone="green" type="submit">Add Payment</Button></div></form></Modal>
+  const selectTenant = (id: string) => {
+    setTenantId(id); setRentAmount(0); setSecurityAmount(0); setElectricityAmount(0); setOtherAmount(0); setError('')
+  }
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    if (rentAmount + securityAmount + electricityAmount + otherAmount <= 0) { setError('Enter at least one payment amount.'); return }
+    setSaving(true); setError('')
+    try {
+      await onSubmit({ tenantId, rentAmount, securityAmount, electricityAmount, otherAmount, paymentMode, description: String(form.get('description') || '') })
+      onClose()
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Payment could not be saved.')
+    } finally { setSaving(false) }
+  }
+  return <Modal title="Add Received Payment" onClose={onClose}><form className="grid gap-4" onSubmit={submit}><Field label="Tenant"><select className={inputClass} value={tenantId} onChange={(event) => selectTenant(event.target.value)}>{tenants.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field><div className="grid grid-cols-2 gap-2 rounded-md bg-slate-50 p-3 text-sm"><p>Rent balance<br /><b>{money(rentBalance)}</b></p><p>Security balance<br /><b>{money(securityBalance)}</b></p><p>Security received<br /><b className="text-emerald-700">{money(securityReceived)}</b></p><p>Security total<br /><b>{money(tenant?.security || 0)}</b></p></div><div className="grid gap-4 sm:grid-cols-2"><Field label="Rent received"><input className={inputClass} type="number" min="0" max={rentBalance || undefined} value={rentAmount || ''} placeholder="0" onChange={(event) => setRentAmount(Number(event.target.value))} /></Field><Field label="Security deposit received"><input className={inputClass} type="number" min="0" max={securityBalance || undefined} value={securityAmount || ''} placeholder="0" onChange={(event) => setSecurityAmount(Number(event.target.value))} /></Field><Field label="Electricity received"><input className={inputClass} type="number" min="0" value={electricityAmount || ''} placeholder="0" onChange={(event) => setElectricityAmount(Number(event.target.value))} /></Field><Field label="Other received"><input className={inputClass} type="number" min="0" value={otherAmount || ''} placeholder="0" onChange={(event) => setOtherAmount(Number(event.target.value))} /></Field></div><Field label="Payment mode"><select className={inputClass} value={paymentMode} onChange={(event) => setPaymentMode(event.target.value)}><option>Cash</option><option>UPI</option><option>Bank Transfer</option><option>Card</option></select></Field><Field label="Description/source optional"><input name="description" className={inputClass} /></Field>{error && <p className="rounded-md bg-rose-50 p-3 text-sm text-rose-700">{error}</p>}<div className="flex justify-end gap-2"><Button tone="soft" onClick={onClose}>Cancel</Button><Button tone="green" type="submit" disabled={saving}>{saving ? 'Saving...' : 'Add Payment'}</Button></div></form></Modal>
 }
 
 function NoticeModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (notice: NonNullable<Tenant['notice']>) => void }) {

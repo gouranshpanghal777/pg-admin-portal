@@ -16,8 +16,8 @@ export async function loadAppData(): Promise<AppData> {
     branches: branches.map((r) => ({ id: r.id, name: r.name, address: r.address, active: r.active, floors: r.floors, notes: r.notes, contact: r.contact })),
     users: profiles.map((r) => { const s = staffById.get(r.id); return { id: r.id, name: r.name, phone: r.phone || '', role: r.role === 'admin' ? 'Admin' : 'Staff', active: r.active, email: s?.email || '', username: s?.username || '', branchIds: assignments.filter((a) => a.user_id === r.id).map((a) => a.branch_id), permissions: permissions.filter((p) => p.user_id === r.id && p.allowed).map((p) => p.permission) } }),
     rooms: rooms.map((r) => ({ id: r.id, branchId: r.branch_id, number: r.number, floor: r.floor, type: r.type, beds: r.beds, rent: num(r.rent), electricity: r.electricity, electricityAmount: num(r.electricity_amount), status: r.status, notes: r.notes })),
-    tenants: tenants.map((r) => ({ id: r.id, branchId: r.branch_id, name: r.name, phone: r.phone, email: r.email || '', roomId: r.room_id, bedNo: r.bed_no, monthlyRent: num(r.monthly_rent), security: num(r.security), electricity: r.electricity, electricityAmount: num(r.electricity_amount), joiningDate: r.joining_date, dueDate: r.due_date, status: r.status, idProof: r.id_proof || '', paidThisMonth: num(r.paid_this_month), notice: r.notice || undefined, left: r.left_details || undefined })),
-    payments: payments.map((r) => ({ id: r.id, branchId: r.branch_id, tenantId: r.tenant_id, amount: num(r.amount), date: r.payment_date, month: r.month, status: r.status, invoiceId: r.invoice_id || '', paymentType: r.payment_type || 'Rent', paymentMode: r.payment_mode || 'Cash', description: r.description || '' })),
+    tenants: tenants.map((r) => ({ id: r.id, branchId: r.branch_id, name: r.name, phone: r.phone, email: r.email || '', roomId: r.room_id, bedNo: r.bed_no, monthlyRent: num(r.monthly_rent), security: num(r.security), securityReceived: num(r.security_received), securityBalance: num(r.security_balance ?? num(r.security) - num(r.security_received)), electricity: r.electricity, electricityAmount: num(r.electricity_amount), joiningDate: r.joining_date, dueDate: r.due_date, status: r.status, idProof: r.id_proof || '', paidThisMonth: num(r.paid_this_month), notice: r.notice || undefined, left: r.left_details || undefined })),
+    payments: payments.map((r) => ({ id: r.id, branchId: r.branch_id, tenantId: r.tenant_id, amount: num(r.amount), date: r.payment_date, month: r.month, status: r.status, invoiceId: r.invoice_id || '', paymentType: normalizePaymentType(r.payment_type), paymentMode: r.payment_mode || 'Cash', description: r.description || '' })),
     cashbook: cashbook.map((r) => ({ id: r.id, branchId: r.branch_id, type: r.type, amount: num(r.amount), description: r.description, date: r.entry_date, source: r.source, linkedId: r.linked_id || undefined })),
     expenses: expenses.map((r) => ({ id: r.id, branchId: r.branch_id, category: r.category, description: r.description, amount: num(r.amount), date: r.expense_date, vendor: r.vendor || '' })),
     inventory: inventory.map((r) => ({ id: r.id, branchId: r.branch_id, name: r.name, category: r.category, stock: num(r.stock), unit: r.unit, reorderAt: num(r.reorder_at), lastPurchase: r.last_purchase || '' })),
@@ -31,7 +31,7 @@ export async function loadAppData(): Promise<AppData> {
 const rows = {
   branches: (r: any, userId: string) => ({ id: r.id, name: r.name, address: r.address, floors: r.floors || null, notes: r.notes || null, contact: r.contact || null, active: r.active !== false, created_by: userId, updated_at: new Date().toISOString() }),
   rooms: (r: any, userId: string) => ({ id: r.id, branch_id: r.branchId, number: r.number, floor: r.floor, type: r.type, beds: r.beds, rent: r.rent, electricity: r.electricity, electricity_amount: r.electricityAmount, status: r.status, notes: r.notes || null, created_by: userId, updated_by: userId }),
-  tenants: (r: any, userId: string) => ({ id: r.id, branch_id: r.branchId, name: r.name, phone: r.phone, email: r.email || null, room_id: r.roomId, bed_no: r.bedNo, monthly_rent: r.monthlyRent, security: r.security, electricity: r.electricity, electricity_amount: r.electricityAmount, joining_date: r.joiningDate, due_date: r.dueDate, status: r.status, id_proof: r.idProof || null, paid_this_month: r.paidThisMonth, notice: r.notice || null, left_details: r.left || null, created_by: userId, updated_by: userId }),
+  tenants: (r: any, userId: string) => ({ id: r.id, branch_id: r.branchId, name: r.name, phone: r.phone, email: r.email || null, room_id: r.roomId, bed_no: r.bedNo, monthly_rent: r.monthlyRent, security: r.security, security_received: r.securityReceived || 0, electricity: r.electricity, electricity_amount: r.electricityAmount, joining_date: r.joiningDate, due_date: r.dueDate, status: r.status, id_proof: r.idProof || null, paid_this_month: r.paidThisMonth, notice: r.notice || null, left_details: r.left || null, created_by: userId, updated_by: userId }),
   payments: (r: any, userId: string) => ({ id: r.id, branch_id: r.branchId, tenant_id: r.tenantId, amount: r.amount, payment_date: r.date, month: r.month, status: r.status, payment_type: r.paymentType, payment_mode: r.paymentMode || 'Cash', description: r.description || null, invoice_id: r.invoiceId || null, created_by: userId }),
   cashbook: (r: any, userId: string) => ({ id: r.id, branch_id: r.branchId, type: r.type, amount: r.amount, description: r.description, entry_date: r.date, source: r.source, linked_id: r.linkedId || null, created_by: userId, updated_by: userId }),
   expenses: (r: any, userId: string) => ({ id: r.id, branch_id: r.branchId, category: r.category, description: r.description, amount: r.amount, expense_date: r.date, vendor: r.vendor || null, created_by: userId }),
@@ -52,15 +52,46 @@ export async function persistAppData(before: AppData, after: AppData, userId: st
     const oldMap = new Map(oldItems.map((item: any) => [item.id, JSON.stringify(item)]))
     const changed = newItems.filter((item: any) => oldMap.get(item.id) !== JSON.stringify(item))
     const table = tableNames[key] || key
-    if (changed.length) { const { error } = await supabase.from(table).upsert(changed.map((item: any) => rows[key](item, userId))); if (error) throw error }
+    if (changed.length) { const { error } = await supabase.from(table).upsert(changed.map((item: any) => rows[key](item, userId))); if (error) throw databaseError(`upsert ${table}`, error) }
   }
   for (const key of [...order].reverse()) {
     const oldItems = (before as any)[key] || []
     const newItems = (after as any)[key] || []
     const removed = oldItems.filter((item: any) => !newItems.some((next: any) => next.id === item.id)).map((item: any) => item.id)
     const table = tableNames[key] || key
-    if (removed.length) { const { error } = await supabase.from(table).delete().in('id', removed); if (error) throw error }
+    if (removed.length) { const { error } = await supabase.from(table).delete().in('id', removed); if (error) throw databaseError(`delete ${table}`, error) }
   }
+}
+
+const normalizePaymentType = (value: unknown): 'Rent' | 'Security Deposit' | 'Electricity' | 'Other' => {
+  const type = String(value || 'rent').toLowerCase().replace('_', ' ')
+  if (type === 'security' || type === 'security deposit') return 'Security Deposit'
+  if (type === 'electricity') return 'Electricity'
+  if (type === 'other') return 'Other'
+  return 'Rent'
+}
+
+const databaseError = (operation: string, error: { message?: string; code?: string; details?: string; hint?: string }) => {
+  const detail = [error.message, error.details, error.hint].filter(Boolean).join(' | ')
+  const result = new Error(`Supabase ${operation} failed${error.code ? ` [${error.code}]` : ''}: ${detail || 'Unknown database error'}`)
+  console.error(result.message, error)
+  return result
+}
+
+export async function recordSplitPayment(input: { tenantId: string; branchId: string; rentAmount: number; securityAmount: number; electricityAmount: number; otherAmount: number; paymentDate: string; paymentMode: string; description: string }) {
+  const { data, error } = await supabase.rpc('record_split_payment', {
+    p_tenant_id: input.tenantId,
+    p_branch_id: input.branchId,
+    p_rent_amount: input.rentAmount,
+    p_security_amount: input.securityAmount,
+    p_electricity_amount: input.electricityAmount,
+    p_other_amount: input.otherAmount,
+    p_payment_date: input.paymentDate,
+    p_payment_mode: input.paymentMode,
+    p_description: input.description || null,
+  })
+  if (error) throw databaseError('record_split_payment RPC', error)
+  return data
 }
 
 export async function createStaffAccount(payload: { id?: string; name: string; phone?: string; email?: string; username?: string; password?: string; branchIds: string[]; permissions: string[] }) {
