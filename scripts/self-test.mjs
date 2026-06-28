@@ -104,6 +104,12 @@ assert(data.tenants.some((item) => item.id === 'new' && item.status === 'Left') 
 assert(paymentTotal(data.payments, selectedBranch, '2026-06') === 9000 && data.payments.filter((payment) => payment.tenantId === tenant.id).length === 4, '7a. Vacating preserves the ₹9000 monthly total and all payment rows')
 assert(paymentTotal(data.payments, selectedBranch, '2026-06', 'Rent') === 6500 && paymentTotal(data.payments, selectedBranch, '2026-06', 'Security Deposit') === 2500, '7b. Historical rent and security totals remain ₹6500 and ₹2500')
 
+data.tenants.push({ ...tenant, id: 'delete-me', branchId: 'b2', status: 'Active' })
+data.payments.push({ id: uid('p'), branchId: 'b2', tenantId: 'delete-me', paymentType: 'Rent', amount: 1000, month: '2026-06' })
+data.tenants = data.tenants.filter((item) => item.id !== 'delete-me')
+data.payments = data.payments.filter((payment) => payment.tenantId !== 'delete-me')
+assert(!data.tenants.some((item) => item.id === 'delete-me') && !data.payments.some((payment) => payment.tenantId === 'delete-me'), '7c. Permanent delete removes tenant and payment history together')
+
 data.expenses.push({ id: uid('e'), branchId: selectedBranch, category: 'Grocery', amount: 1000 })
 data.cashbook.push({ id: uid('c'), branchId: selectedBranch, type: 'Debit', amount: 1000 })
 assert(summarize(data, selectedBranch).expenses === 1000, '9. Expense updates expenses and cashbook debit')

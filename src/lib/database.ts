@@ -108,6 +108,12 @@ export async function admitTenant(input: { requestId: string; branchId: string; 
   return data as string
 }
 
+export async function deleteTenantWithPayments(tenantId: string) {
+  const { data, error } = await supabase.rpc('delete_tenant_with_payments', { p_tenant_id: tenantId })
+  if (error) throw databaseError('delete_tenant_with_payments RPC', error)
+  return data as { tenant_id: string; payment_records_deleted: number }
+}
+
 export async function createStaffAccount(payload: { id?: string; name: string; phone?: string; email?: string; username?: string; password?: string; branchIds: string[]; permissions: string[] }) {
   const { data, error } = await supabase.functions.invoke('create-staff', { body: payload })
   if (error) throw error
