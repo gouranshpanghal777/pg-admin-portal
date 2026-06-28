@@ -78,8 +78,9 @@ const databaseError = (operation: string, error: { message?: string; code?: stri
   return result
 }
 
-export async function recordSplitPayment(input: { tenantId: string; branchId: string; rentAmount: number; securityAmount: number; electricityAmount: number; otherAmount: number; paymentDate: string; paymentMode: string; description: string }) {
-  const { data, error } = await supabase.rpc('record_split_payment', {
+export async function recordSplitPayment(input: { requestId: string; tenantId: string; branchId: string; rentAmount: number; securityAmount: number; electricityAmount: number; otherAmount: number; paymentDate: string; paymentMode: string; description: string }) {
+  const { data, error } = await supabase.rpc('record_split_payment_v2', {
+    p_request_id: input.requestId,
     p_tenant_id: input.tenantId,
     p_branch_id: input.branchId,
     p_rent_amount: input.rentAmount,
@@ -90,8 +91,21 @@ export async function recordSplitPayment(input: { tenantId: string; branchId: st
     p_payment_mode: input.paymentMode,
     p_description: input.description || null,
   })
-  if (error) throw databaseError('record_split_payment RPC', error)
+  if (error) throw databaseError('record_split_payment_v2 RPC', error)
   return data
+}
+
+export async function admitTenant(input: { requestId: string; branchId: string; name: string; phone: string; email: string; roomId: string; bedNo: number; joiningDate: string; dueDate: string; monthlyRent: number; security: number; electricity: string; electricityAmount: number; idProof: string }) {
+  const { data, error } = await supabase.rpc('admit_tenant_v2', {
+    p_request_id: input.requestId, p_branch_id: input.branchId, p_name: input.name,
+    p_phone: input.phone, p_email: input.email || '', p_room_id: input.roomId,
+    p_bed_no: input.bedNo, p_joining_date: input.joiningDate, p_due_date: input.dueDate,
+    p_monthly_rent: input.monthlyRent, p_security: input.security,
+    p_electricity: input.electricity, p_electricity_amount: input.electricityAmount,
+    p_id_proof: input.idProof || '',
+  })
+  if (error) throw databaseError('admit_tenant_v2 RPC', error)
+  return data as string
 }
 
 export async function createStaffAccount(payload: { id?: string; name: string; phone?: string; email?: string; username?: string; password?: string; branchIds: string[]; permissions: string[] }) {
