@@ -110,9 +110,24 @@ data.tenants = data.tenants.filter((item) => item.id !== 'delete-me')
 data.payments = data.payments.filter((payment) => payment.tenantId !== 'delete-me')
 assert(!data.tenants.some((item) => item.id === 'delete-me') && !data.payments.some((payment) => payment.tenantId === 'delete-me'), '7c. Permanent delete removes tenant and payment history together')
 
+const linkedPayment = { id: 'linked-payment', branchId: 'b1', tenantId: 'old', paymentType: 'Rent', amount: 1000, month: '2026-06' }
+const linkedCredit = { id: 'linked-credit', branchId: 'b1', type: 'Credit', amount: 1000, linkedId: linkedPayment.id, source: 'Payment' }
+data.payments.push(linkedPayment)
+data.cashbook.push(linkedCredit)
+data.cashbook = data.cashbook.filter((entry) => entry.id !== linkedCredit.id)
+data.payments = data.payments.filter((payment) => payment.id !== linkedPayment.id)
+assert(!data.cashbook.some((entry) => entry.id === linkedCredit.id) && !data.payments.some((payment) => payment.id === linkedPayment.id), '7d. Deleting payment cashbook credit removes linked payment')
+
 data.expenses.push({ id: uid('e'), branchId: selectedBranch, category: 'Grocery', amount: 1000 })
 data.cashbook.push({ id: uid('c'), branchId: selectedBranch, type: 'Debit', amount: 1000 })
 assert(summarize(data, selectedBranch).expenses === 1000, '9. Expense updates expenses and cashbook debit')
+
+const linkedExpense = { id: 'linked-expense', branchId: 'b1', category: 'Miscellaneous', amount: 250, cashbookId: 'linked-debit' }
+data.expenses.push(linkedExpense)
+data.cashbook.push({ id: 'linked-debit', branchId: 'b1', type: 'Debit', amount: 250, linkedId: linkedExpense.id, source: 'Expense' })
+data.expenses = data.expenses.filter((expense) => expense.id !== linkedExpense.id)
+data.cashbook = data.cashbook.filter((entry) => entry.id !== 'linked-debit')
+assert(!data.expenses.some((expense) => expense.id === linkedExpense.id) && !data.cashbook.some((entry) => entry.id === 'linked-debit'), '9a. Deleting expense cashbook debit removes linked expense')
 
 data.inventory = data.inventory.map((item) => item.id === 'iv1' ? { ...item, stock: item.stock + 5 } : item)
 data.purchases.push({ id: uid('ip'), branchId: selectedBranch, itemId: 'iv1', quantity: 5, unitCost: 100 })
