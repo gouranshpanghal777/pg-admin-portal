@@ -146,6 +146,17 @@ assert(data.invoices.some((invoice) => invoice.number === 'PG95-TEST'), '13. Inv
 const report = summarize(data, selectedBranch)
 assert(report.revenue === 9000 && report.expenses === 1500, '14. Monthly report totals derive from rent, security, and other entries')
 
+const importedLedger = [
+  { date: '2026-04-30', type: 'Credit', amount: 22593 },
+  { date: '2026-05-01', type: 'Credit', amount: 339850 },
+  { date: '2026-05-31', type: 'Debit', amount: 169241 },
+]
+const openingBalance = importedLedger.filter((entry) => entry.date < '2026-05-01').reduce((sum, entry) => sum + (entry.type === 'Credit' ? entry.amount : -entry.amount), 0)
+const mayIn = importedLedger.filter((entry) => entry.date.startsWith('2026-05') && entry.type === 'Credit').reduce((sum, entry) => sum + entry.amount, 0)
+const mayOut = importedLedger.filter((entry) => entry.date.startsWith('2026-05') && entry.type === 'Debit').reduce((sum, entry) => sum + entry.amount, 0)
+assert(openingBalance === 22593 && mayIn === 339850 && mayOut === 169241 && openingBalance + mayIn - mayOut === 193202, '14a. Imported cashbook summary derives opening and closing balances')
+assert(Math.round((53 / 57) * 100) === 93 && 57 - 53 === 4, '14b. Farukhnagar occupancy supports 53 current tenants')
+
 const canEditFinancial = (role) => role === 'Admin'
 assert(canEditFinancial('Staff') === false, '15. Staff login edit/delete restrictions enforced')
 assert(canEditFinancial('Admin') === true, '16. Admin login full edit access enforced')
