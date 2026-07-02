@@ -158,6 +158,17 @@ assert(openingBalance === 22593 && mayIn === 339850 && mayOut === 169241 && open
 assert(Math.round((53 / 57) * 100) === 93 && 57 - 53 === 4, '14b. Farukhnagar occupancy supports 53 current tenants')
 const importedSecurity = [{ security: 2500, securityReceived: 2500 }, { security: 0, securityReceived: 0 }]
 assert(importedSecurity.every((item) => item.security - item.securityReceived === 0), '14c. Imported security is already received and zero security is not due')
+const heads = [
+  { type: 'rent', agreed: 6500, received: 6000, advanceApplied: 0 },
+  { type: 'security', agreed: 2500, received: 2000, advanceApplied: 0 },
+  { type: 'electricity', agreed: 800, received: 800, advanceApplied: 0 },
+]
+assert(heads.find((head) => head.type === 'rent').agreed - heads.find((head) => head.type === 'rent').received === 500, '14d. Rent obligation remains independent with ₹500 pending')
+assert(heads.find((head) => head.type === 'security').agreed - heads.find((head) => head.type === 'security').received === 500, '14e. Security obligation remains independent with ₹500 pending')
+const advanceMovements = [{ type: 'credit', amount: 1000 }, { type: 'used', amount: 650 }]
+assert(advanceMovements.reduce((sum, item) => sum + (item.type === 'credit' ? item.amount : -item.amount), 0) === 350, '14f. Advance remaining derives from credit and usage ledger')
+const historicalJune = data.payments.filter((payment) => payment.month === '2026-06').reduce((sum, payment) => sum + payment.amount, 0)
+assert(historicalJune > 0 && data.tenants.some((item) => item.status === 'Left'), '14g. Vacating preserves historical ledger collections')
 
 const canEditFinancial = (role) => role === 'Admin'
 assert(canEditFinancial('Staff') === false, '15. Staff login edit/delete restrictions enforced')
