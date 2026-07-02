@@ -701,10 +701,12 @@ function Metric({ icon, label, value, tone = 'blue', onClick }: { icon: ReactNod
 
 function TenantsPage({ data, scoped, tenantTab, setTenantTab, filter, setFilter, setModal, setSelectedTenantId, isAdmin, canAction }: { data: AppData; scoped: ReturnType<typeof branchData>; tenantTab: 'Active' | 'Left PG'; setTenantTab: (value: 'Active' | 'Left PG') => void; filter: string; setFilter: (value: string) => void; setModal: (value: string) => void; setSelectedTenantId: (id: string) => void; isAdmin: boolean; canAction: (permission: string) => boolean }) {
   const filtered = scoped.activeTenants.filter((tenant) => filter === 'All' || (filter === 'Vacating Notice' ? tenant.status === 'Notice' : getPaymentStatus(tenant) === filter))
+  const totalSecurityHeld = scoped.activeTenants.reduce((sum, tenant) => sum + tenant.security, 0)
   return (
     <div className="grid gap-4">
       <Tabs values={['Active', 'Left PG']} value={tenantTab} onChange={(value) => setTenantTab(value as 'Active' | 'Left PG')} />
       {tenantTab === 'Active' ? <>
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Metric icon={<ShieldCheck />} label="Total Security Held" value={money(totalSecurityHeld)} /></div>
         <Tabs values={['All', 'Paid', 'Pending', 'Overdue', 'Vacating Notice']} value={filter} onChange={setFilter} />
         <DataTable headers={['Tenant name', 'Email/phone', 'Room', 'Room type', 'Monthly rent', 'Rent paid', 'Rent balance', 'Security', 'Security received', 'Security balance', 'Electricity', 'Since', 'Rent Due Date', 'Status', 'Actions']}>
           {filtered.map((tenant) => {
