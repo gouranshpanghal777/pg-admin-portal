@@ -156,6 +156,8 @@ const mayIn = importedLedger.filter((entry) => entry.date.startsWith('2026-05') 
 const mayOut = importedLedger.filter((entry) => entry.date.startsWith('2026-05') && entry.type === 'Debit').reduce((sum, entry) => sum + entry.amount, 0)
 assert(openingBalance === 22593 && mayIn === 339850 && mayOut === 169241 && openingBalance + mayIn - mayOut === 193202, '14a. Imported cashbook summary derives opening and closing balances')
 assert(Math.round((53 / 57) * 100) === 93 && 57 - 53 === 4, '14b. Farukhnagar occupancy supports 53 current tenants')
+const importedSecurity = [{ security: 2500, securityReceived: 2500 }, { security: 0, securityReceived: 0 }]
+assert(importedSecurity.every((item) => item.security - item.securityReceived === 0), '14c. Imported security is already received and zero security is not due')
 
 const canEditFinancial = (role) => role === 'Admin'
 assert(canEditFinancial('Staff') === false, '15. Staff login edit/delete restrictions enforced')
