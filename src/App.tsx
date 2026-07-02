@@ -245,8 +245,8 @@ export type AppData = {
 }
 const emptyAppData = (): AppData => ({ branches: [], users: [], tenants: [], rooms: [], payments: [], cashbook: [], expenses: [], inventory: [], purchases: [], tickets: [], invoices: [], activityLogs: [], obligations: [], securityLedger: [], advances: [] })
 
-const today = '2026-06-27'
-const currentMonth = '2026-06'
+const today = new Date().toISOString().slice(0, 10)
+const currentMonth = today.slice(0, 7)
 const money = (value: number) => `₹${value.toLocaleString('en-IN')}`
 const formatDate = (value?: string) => value ? value.slice(0, 10).split('-').reverse().join('/') : '-'
 const formatDateTime = (value: string) => new Intl.DateTimeFormat('en-GB', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value))
@@ -307,7 +307,7 @@ function branchData(data: AppData, branchId: string) {
   const overdue = activeTenants.reduce((sum, tenant) => getPaymentStatus(tenant) === 'Overdue' ? sum + Math.max(0, getTenantDue(tenant) - tenant.paidThisMonth) : sum, 0)
   const pending = activeTenants.reduce((sum, tenant) => sum + Math.max(0, getTenantDue(tenant) - tenant.paidThisMonth), 0)
   const openTickets = tickets.filter((ticket) => ticket.status !== 'Resolved')
-  const obligationPending = (type: PaymentObligation['paymentType']) => obligations.filter((item) => item.paymentType === type).reduce((sum, item) => sum + Math.max(0, item.agreed - item.received - item.advanceApplied), 0)
+  const obligationPending = (type: PaymentObligation['paymentType']) => obligations.filter((item) => item.paymentType === type && item.period === (type === 'Security Deposit' ? 'one-time' : currentMonth)).reduce((sum, item) => sum + Math.max(0, item.agreed - item.received - item.advanceApplied), 0)
   const advanceBalance = advances.reduce((sum, item) => sum + (item.type === 'credit' ? item.amount : -item.amount), 0)
 
   return {
@@ -687,6 +687,8 @@ function App() {
 
 function Dashboard({ scoped, setModal, setPage, setTenantTab, setTenantFilter, setRoomFloor, setFinanceTab, setPaymentFilter, setTicketFilter }: { scoped: ReturnType<typeof branchData>; setModal: (value: string) => void; setPage: (page: Page) => void; setTenantTab: (value: 'Active' | 'Left PG') => void; setTenantFilter: (value: string) => void; setRoomFloor: (value: string) => void; setFinanceTab: (value: string) => void; setPaymentFilter: (value: string) => void; setTicketFilter: (value: string) => void }) {
   const todayCollection = scoped.payments.filter((payment) => payment.date === today).reduce((sum, payment) => sum + payment.amount, 0)
+  const monthlyCollection = scoped.payments.filter((payment) => payment.month === currentMonth).reduce((sum, payment) => sum + payment.amount, 0)
+  const monthlyExpenses = scoped.cashbook.filter((entry) => entry.date.startsWith(currentMonth) && entry.type === 'Debit').reduce((sum, entry) => sum + entry.amount, 0)
   const newAdmissions = scoped.activeTenants.filter((tenant) => tenant.joiningDate.startsWith(currentMonth)).length
   const vacatedThisMonth = scoped.leftTenants.filter((tenant) => tenant.left?.leftDate.startsWith(currentMonth)).length
   const upcomingDue = scoped.activeTenants.filter((tenant) => daysUntil(tenant.dueDate) >= 0 && daysUntil(tenant.dueDate) <= 3).length
@@ -706,14 +708,14 @@ function Dashboard({ scoped, setModal, setPage, setTenantTab, setTenantFilter, s
     <div className="grid gap-4">
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         <Metric icon={<IndianRupee />} label="Today's Collection" value={money(todayCollection)} onClick={() => setPage('Payments')} />
-        <Metric icon={<IndianRupee />} label="Monthly Collection" value={money(scoped.revenue)} onClick={() => { setFinanceTab('Cashbook'); setPage('Finance') }} />
+        <Metric icon={<IndianRupee />} label="Monthly Collection" value={money(monthlyCollection)} onClick={() => setPage('Payments')} />
         <Metric icon={<Users />} label="Current Tenants" value={scoped.activeTenants.length} onClick={() => { setTenantTab('Active'); setTenantFilter('All'); setPage('Tenants') }} />
         <Metric icon={<Home />} label="Occupancy Rate" value={`${scoped.occupancyRate}%`} onClick={() => { setRoomFloor('All Floors'); setPage('Rooms') }} />
         <Metric icon={<Home />} label="Vacant Beds" value={Math.max(0, scoped.totalBeds - scoped.occupiedBeds)} onClick={() => setPage('Rooms')} />
         <Metric icon={<AlertTriangle />} label="Pending Rent" value={money(scoped.pendingRent)} tone="orange" onClick={() => setPage('Payments')} />
         <Metric icon={<ShieldCheck />} label="Pending Security" value={money(scoped.pendingSecurity)} tone="orange" onClick={() => setPage('Payments')} />
         <Metric icon={<CircleDollarSign />} label="Cash Balance" value={money(scoped.cashBalance)} onClick={() => { setFinanceTab('Cashbook'); setPage('Finance') }} />
-        <Metric icon={<ReceiptText />} label="Monthly Expenses" value={money(scoped.expensesTotal)} tone="red" onClick={() => setPage('Finance')} />
+        <Metric icon={<ReceiptText />} label="Monthly Expenses" value={money(monthlyExpenses)} tone="red" onClick={() => setPage('Finance')} />
         <Metric icon={<Wrench />} label="Open Maintenance Tickets" value={scoped.openTickets.length} tone="orange" onClick={() => { setTicketFilter('Active'); setPage('Maintenance') }} />
         <Metric icon={<UserPlus />} label="New Admissions" value={newAdmissions} onClick={() => setPage('Tenants')} />
         <Metric icon={<LogOut />} label="Vacated This Month" value={vacatedThisMonth} onClick={() => { setTenantTab('Left PG'); setPage('Tenants') }} />
@@ -779,7 +781,7 @@ function PaymentsPage({ data, scoped, filter, setFilter, setModal, setSelectedTe
   const securityCollected = paymentTotal(scoped.payments, 'Security Deposit')
   const electricityCollected = paymentTotal(scoped.payments, 'Electricity')
   const otherCollected = paymentTotal(scoped.payments, 'Other')
-  const overdueRent = scoped.obligations.filter((item) => item.paymentType === 'Rent' && item.status === 'Overdue').reduce((sum, item) => sum + Math.max(0, item.agreed - item.received - item.advanceApplied), 0)
+  const overdueRent = scoped.obligations.filter((item) => item.paymentType === 'Rent' && item.period === currentMonth && item.status === 'Overdue').reduce((sum, item) => sum + Math.max(0, item.agreed - item.received - item.advanceApplied), 0)
   return <div className="grid gap-4"><div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5"><Metric icon={<IndianRupee />} label="Total Collected" value={money(collected)} /><Metric icon={<ReceiptText />} label="Rent Collected" value={money(rentCollected)} /><Metric icon={<ShieldCheck />} label="Security Collected" value={money(securityCollected)} /><Metric icon={<ReceiptText />} label="Electricity Collected" value={money(electricityCollected)} /><Metric icon={<CircleDollarSign />} label="Other Income" value={money(otherCollected)} /><Metric icon={<AlertTriangle />} label="Pending Rent" value={money(scoped.pendingRent)} tone="orange" /><Metric icon={<ShieldCheck />} label="Pending Security" value={money(scoped.pendingSecurity)} tone="orange" /><Metric icon={<CircleDollarSign />} label="Advance Balance" value={money(scoped.advanceBalance)} /><Metric icon={<AlertTriangle />} label="Overdue Rent" value={money(overdueRent)} tone="red" /></div><Tabs values={['All', 'Paid', 'Pending', 'Overdue', 'Left PG']} value={filter} onChange={setFilter} /><DataTable headers={['Tenant', 'Room', 'Rent Due Date', 'Monthly rent', 'Rent paid', 'Rent balance', 'Security', 'Security received', 'Security balance', 'Electricity', 'Status', 'Actions']}>{tenants.map((tenant) => { const room = data.rooms.find((item) => item.id === tenant.roomId); const rentObligation = scoped.obligations.find((item) => item.tenantId === tenant.id && item.period === currentMonth && item.paymentType === 'Rent'); const rentPaid = rentObligation?.received ?? paymentTotal(scoped.payments, 'Rent', tenant.id); const rentBalance = Math.max(0, (rentObligation?.agreed ?? tenant.monthlyRent) - rentPaid - (rentObligation?.advanceApplied ?? 0)); const securityReceived = tenant.securityReceived; const securityBalance = Math.max(0, tenant.security - tenant.securityReceived); const status = tenant.status === 'Left' ? 'Left PG' : rentObligation?.status || getPaymentStatus({ ...tenant, paidThisMonth: rentPaid }); return <tr key={tenant.id} className="border-t border-slate-100"><td className="p-3 font-semibold">{tenant.name}</td><td className="p-3">{room?.number || 'Archived room'}</td><td className="p-3 font-semibold">{formatDate(tenant.dueDate)}</td><td className="p-3">{money(tenant.monthlyRent)}</td><td className="p-3 text-emerald-700">{money(rentPaid)}</td><td className="p-3 text-rose-700">{money(rentBalance)}</td><td className="p-3">{money(tenant.security)}</td><td className="p-3 text-emerald-700">{money(securityReceived)}</td><td className="p-3">{securityBalance === 0 ? <Badge tone="green">Cleared</Badge> : money(securityBalance)}</td><td className="p-3">{tenant.electricity === 'Fixed' ? money(tenant.electricityAmount) : 'Included'}</td><td className="p-3"><Badge tone={status === 'Paid' ? 'green' : status === 'Overdue' ? 'red' : status === 'Left PG' ? 'slate' : 'orange'}>{status}</Badge></td><td className="p-3">{canAdd && tenant.status !== 'Left' && <Button tone="green" onClick={() => { setSelectedTenantId(tenant.id); setModal('payment') }}><Plus size={15} /> Add received payment</Button>}</td></tr> })}</DataTable><h2 className="text-lg font-bold">Payment History</h2><DataTable headers={["Date", "Tenant", "Head", "Amount", "Mode", "Description"]}>{[...scoped.payments].sort((a, b) => b.date.localeCompare(a.date)).map((payment) => <tr key={payment.id} className="border-t border-slate-100"><td className="p-3">{formatDate(payment.date)}</td><td className="p-3 font-semibold">{data.tenants.find((tenant) => tenant.id === payment.tenantId)?.name || "Archived tenant"}</td><td className="p-3">{payment.paymentType}</td><td className="p-3 text-emerald-700">{money(payment.amount)}</td><td className="p-3">{payment.paymentMode}</td><td className="p-3">{payment.description}</td></tr>)}</DataTable><h2 className="text-lg font-bold">Security Ledger</h2><DataTable headers={["Date", "Tenant", "Movement", "Amount", "Reason"]}>{[...scoped.securityLedger].sort((a, b) => b.date.localeCompare(a.date)).map((movement) => <tr key={movement.id} className="border-t border-slate-100"><td className="p-3">{formatDate(movement.date)}</td><td className="p-3 font-semibold">{data.tenants.find((tenant) => tenant.id === movement.tenantId)?.name || "Archived tenant"}</td><td className="p-3">{movement.type}</td><td className="p-3">{money(movement.amount)}</td><td className="p-3">{movement.reason || "-"}</td></tr>)}</DataTable></div>
 }
 
