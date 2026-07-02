@@ -116,17 +116,19 @@ drop trigger if exists sync_payment_ledgers on public.payments;
 create trigger sync_payment_ledgers after insert on public.payments for each row execute function public.sync_payment_ledgers();
 
 -- Backfill independent obligations without altering historical payment rows.
+with normalized_payments as (
+  select p.*, case when lower(p.payment_type) in ('security','security deposit') then 'one-time' else p.month end as obligation_period,
+    case when lower(p.payment_type) in ('security','security deposit') then 'security' else lower(p.payment_type) end as obligation_type
+  from public.payments p
+)
 insert into public.payment_obligations(branch_id, tenant_id, period, payment_type, agreed_amount, received_amount, due_date, created_by)
-select p.branch_id, p.tenant_id,
-  case when lower(p.payment_type) in ('security','security deposit') then 'one-time' else p.month end,
-  case when lower(p.payment_type) = 'security deposit' then 'security' else lower(p.payment_type) end,
-  case when lower(p.payment_type) = 'rent' then max(t.monthly_rent)
-       when lower(p.payment_type) in ('security','security deposit') then max(t.security)
-       when lower(p.payment_type) = 'electricity' then max(t.electricity_amount) else sum(p.amount) end,
+select p.branch_id, p.tenant_id, p.obligation_period, p.obligation_type,
+  case when p.obligation_type = 'rent' then max(t.monthly_rent)
+       when p.obligation_type = 'security' then max(t.security)
+       when p.obligation_type = 'electricity' then max(t.electricity_amount) else sum(p.amount) end,
   sum(p.amount), max(t.due_date), (array_agg(p.created_by))[1]
-from public.payments p join public.tenants t on t.id = p.tenant_id
-group by p.branch_id, p.tenant_id, case when lower(p.payment_type) in ('security','security deposit') then 'one-time' else p.month end,
-  case when lower(p.payment_type) = 'security deposit' then 'security' else lower(p.payment_type) end
+from normalized_payments p join public.tenants t on t.id = p.tenant_id
+group by p.branch_id, p.tenant_id, p.obligation_period, p.obligation_type
 on conflict(tenant_id, period, payment_type) do update set received_amount = excluded.received_amount, agreed_amount = greatest(public.payment_obligations.agreed_amount, excluded.agreed_amount);
 
 update public.payment_obligations set status = case
