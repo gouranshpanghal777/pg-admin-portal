@@ -1,0 +1,17 @@
+{
+  "name": "PG95 Admin Portal",
+  "short_name": "PG95 Admin",
+  "description": "Branch-wise PG operations and finance management",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f3ec",
+  "theme_color": "#0f172a",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

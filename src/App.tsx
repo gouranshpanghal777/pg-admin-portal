@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase, supabaseConfigured } from './lib/supabase'
@@ -252,6 +252,7 @@ const today = localDateValue(new Date())
 const currentMonth = today.slice(0, 7)
 const money = (value: number) => `₹${value.toLocaleString('en-IN')}`
 const formatDate = (value?: string) => value ? value.slice(0, 10).split('-').reverse().join('/') : '-'
+const formatMonth = (value?: string) => value && /^\d{4}-\d{2}$/.test(value) ? new Date(`${value}-01T00:00:00`).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }) : 'No entries'
 const formatDateTime = (value: string) => new Intl.DateTimeFormat('en-GB', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value))
 const uid = (_prefix: string) => crypto.randomUUID()
 const daysUntil = (date: string) =>
@@ -291,7 +292,8 @@ function getRentLedgerState(tenant: Tenant, payments: Payment[], obligations: Pa
     const pending = Math.max(0, agreed - received - advanceApplied)
     if (pending > 0) {
       const dueDate = rentDueDateForPeriod(tenant.joiningDate, period)
-      return { period, paidThroughMonth: period === joiningMonth ? '-' : periodsBetween(joiningMonth, period).slice(-2, -1)[0] || '-', dueDate, agreed, received, advanceApplied, pending, status: (dueDate < today ? 'Overdue' : dueDate === today ? 'Pending' : 'Upcoming') as RentLedgerStatus }
+      const status: RentLedgerStatus = dueDate < today ? 'Overdue' : dueDate === today ? 'Pending' : daysUntil(dueDate) <= 3 ? 'Upcoming' : 'Clear'
+      return { period, paidThroughMonth: period === joiningMonth ? '-' : periodsBetween(joiningMonth, period).slice(-2, -1)[0] || '-', dueDate, agreed, received, advanceApplied, pending, status }
     }
   }
   const period = nextPeriod(currentMonth)
@@ -321,7 +323,7 @@ function getTenantDue(tenant: Tenant) {
 }
 
 function paymentTotal(payments: Payment[], type?: Payment['paymentType'], tenantId?: string, month: string | null = currentMonth) {
-  return payments.filter((payment) => (!month || payment.month === month) && (!type || payment.paymentType === type) && (!tenantId || payment.tenantId === tenantId)).reduce((sum, payment) => sum + payment.amount, 0)
+  return payments.filter((payment) => (!month || payment.date.slice(0, 7) === month) && (!type || payment.paymentType === type) && (!tenantId || payment.tenantId === tenantId)).reduce((sum, payment) => sum + payment.amount, 0)
 }
 
 function getPaymentStatus(tenant: Tenant): PaymentStatus {
@@ -491,6 +493,8 @@ function App() {
   const [inventoryFilter, setInventoryFilter] = useState('All')
   const [ticketFilter, setTicketFilter] = useState('All')
   const [reportRange, setReportRange] = useState('Monthly Summary')
+  const persistenceQueue = useRef(Promise.resolve())
+  const dataRef = useRef(data)
   const currentUser: User = data.users.find((user) => user.id === session?.user.id) || { id: session?.user.id || '', name: session?.user.user_metadata?.name || 'User', role, branchIds: [], permissions: [] }
   const isAdmin = role === 'Admin'
   const can = (permission: string) => isAdmin || currentUser.permissions.includes(permission)
@@ -500,19 +504,24 @@ function App() {
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: result }) => { setSession(result.session); setAuthLoading(false) })
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, next) => { setSession(next); setAuthLoading(false) })
+    const { data: listener } = supabase.auth.onAuthStateChange((event, next) => {
+      if (event === 'SIGNED_OUT') Object.keys(sessionStorage).filter((key) => key.startsWith('pg95-login:')).forEach((key) => sessionStorage.removeItem(key))
+      setSession(next); setAuthLoading(false)
+    })
     return () => listener.subscription.unsubscribe()
   }, [])
 
   useEffect(() => {
     if (!session) { setData(emptyAppData()); return }
     setDataLoading(true); setBackendError('')
-    loadAppData().then(async (next) => { const profile = next.users.find((user) => user.id === session.user.id); if (profile) setRole(profile.role); const loginBranch = next.branches.find((item) => profile?.role === 'Admin' || profile?.branchIds.includes(item.id)); const logged = profile && loginBranch ? logActivity(next, { userName: profile.name, userId: profile.id, userRole: profile.role, branchId: loginBranch.id, branchName: loginBranch.name, module: 'Authentication', actionType: 'Login', description: `${profile.role} ${profile.name} logged in.` }) : next; setData(logged); if (logged !== next) await persistAppData(next, logged, session.user.id) }).catch((error) => setBackendError(error instanceof Error ? error.message : 'Unable to load Supabase data')).finally(() => setDataLoading(false))
+    loadAppData().then(async (next) => { const profile = next.users.find((user) => user.id === session.user.id); if (profile) setRole(profile.role); const loginBranch = next.branches.find((item) => profile?.role === 'Admin' || profile?.branchIds.includes(item.id)); const loginKey = `pg95-login:${session.user.id}`; const shouldLogLogin = sessionStorage.getItem(loginKey) !== '1'; const logged = profile && loginBranch && shouldLogLogin ? logActivity(next, { userName: profile.name, userId: profile.id, userRole: profile.role, branchId: loginBranch.id, branchName: loginBranch.name, module: 'Authentication', actionType: 'Login', description: `${profile.role} ${profile.name} logged in.` }) : next; dataRef.current = logged; setData(logged); if (logged !== next) { await persistAppData(next, logged, session.user.id); sessionStorage.setItem(loginKey, '1') } }).catch((error) => setBackendError(error instanceof Error ? error.message : 'Unable to load Supabase data')).finally(() => setDataLoading(false))
   }, [session])
 
   useEffect(() => {
     if (branchId && !isAdmin && !currentUser.branchIds.includes(branchId)) setBranchId('')
   }, [branchId, currentUser.branchIds, isAdmin])
+
+  useEffect(() => { dataRef.current = data }, [data])
 
   const refreshRoomStatuses = (next: AppData): AppData => ({
     ...next,
@@ -525,12 +534,32 @@ function App() {
 
   const updateData = (updater: (previous: AppData) => AppData, action: string, entity: string, description?: string, metadata?: Record<string, string | number>) => {
     if (!isAdmin && /^(edit|delete)/i.test(action)) return
-    setData((previous) => {
-      const next = refreshRoomStatuses(updater(previous))
-      const logged = logActivity(next, { userName: currentUser.name, userId: currentUser.id, userRole: role, branchId, branchName: branch?.name || '', module: entity, actionType: action, description: description || `${currentUser.role} ${currentUser.name} performed ${action.toLowerCase()} in ${entity}.`, metadata })
-      void persistAppData(previous, logged, currentUser.id).catch((error) => { setBackendError(error instanceof Error ? error.message : 'Supabase update failed'); setData(previous) })
-      return logged
-    })
+    const previous = dataRef.current
+    const next = refreshRoomStatuses(updater(previous))
+    const logged = logActivity(next, { userName: currentUser.name, userId: currentUser.id, userRole: role, branchId, branchName: branch?.name || '', module: entity, actionType: action, description: description || `${currentUser.role} ${currentUser.name} performed ${action.toLowerCase()} in ${entity}.`, metadata })
+    dataRef.current = logged
+    setData(logged)
+    persistenceQueue.current = persistenceQueue.current
+      .then(() => persistAppData(previous, logged, currentUser.id))
+      .catch(async (error) => {
+        setBackendError(error instanceof Error ? error.message : 'Supabase update failed')
+        try { const refreshed = await loadAppData(); dataRef.current = refreshed; setData(refreshed) } catch { /* Keep the optimistic state when reconciliation is unavailable. */ }
+      })
+  }
+
+  const addBranchData = (nextBranch: Omit<Branch, 'id' | 'active'>) => {
+    const id = uid('b')
+    const previous = dataRef.current
+    const next = logActivity({ ...previous, branches: [...previous.branches, { id, active: true, ...nextBranch }] }, { userName: currentUser.name, userId: currentUser.id, userRole: role, branchId: id, branchName: nextBranch.name, module: 'Branches', actionType: 'Add Branch', description: `${role} ${currentUser.name} added new branch ${nextBranch.name}.` })
+    dataRef.current = next
+    setData(next)
+    persistenceQueue.current = persistenceQueue.current
+      .then(() => persistAppData(previous, next, currentUser.id))
+      .catch(async (error) => {
+        setBackendError(error instanceof Error ? error.message : 'Unable to add branch')
+        try { const refreshed = await loadAppData(); dataRef.current = refreshed; setData(refreshed) } catch { /* Keep the optimistic state when reconciliation is unavailable. */ }
+      })
+    setModal('')
   }
 
   if (authLoading) return <LoadingScreen label="Checking your session..." />
@@ -567,7 +596,7 @@ function App() {
           {!visibleBranches.length && <Card className="mt-4 text-center"><Building2 className="mx-auto text-slate-400" /><p className="mt-2 font-semibold">{isAdmin ? 'No active branches yet. Add your first branch to begin.' : 'No branches are assigned to your staff account.'}</p></Card>}
           {isAdmin && data.branches.some((item) => item.active === false) && <p className="mt-6 text-center text-sm text-slate-500">Deactivated branches can be restored from Settings.</p>}
         </div>
-        {modal === 'addBranch' && <CreateBranchModal onClose={() => setModal('')} onSubmit={(nextBranch) => { const id = uid('b'); setData((previous) => { const next = logActivity({ ...previous, branches: [...previous.branches, { id, active: true, ...nextBranch }] }, { userName: currentUser.name, userId: currentUser.id, userRole: role, branchId: id, branchName: nextBranch.name, module: 'Branches', actionType: 'Add Branch', description: `${role} ${currentUser.name} added new branch ${nextBranch.name}.` }); void persistAppData(previous, next, currentUser.id).catch((error) => { setBackendError(error instanceof Error ? error.message : 'Unable to add branch'); setData(previous) }); return next }); setModal('') }} />}
+        {modal === 'addBranch' && <CreateBranchModal onClose={() => setModal('')} onSubmit={addBranchData} />}
       </main>
     )
   }
@@ -850,7 +879,7 @@ function FinancePage({ scoped, financeTab, setFinanceTab, data, branch, setModal
   const totalOut = monthEntries.filter((entry) => entry.type === 'Debit').reduce((sum, entry) => sum + entry.amount, 0)
   let running = opening
   const rows = monthEntries.map((entry) => { running += entry.type === 'Credit' ? entry.amount : -entry.amount; return { ...entry, running } })
-  return <div className="grid gap-4"><Tabs values={['Cashbook', 'Expenses', 'Bill Creator']} value={financeTab} onChange={setFinanceTab} />{financeTab === 'Cashbook' && <><div className="no-print max-w-xs"><Field label="Month"><select className={inputClass} value={selectedMonth} onChange={(event) => setSelectedMonth(event.target.value)}>{months.map((month) => <option key={month} value={month}>{new Date(`-01T00:00:00`).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}</option>)}</select></Field></div><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5"><Metric icon={<CircleDollarSign />} label="Opening Balance" value={money(opening)} /><Metric icon={<IndianRupee />} label="Total IN" value={money(totalIn)} /><Metric icon={<ReceiptText />} label="Total OUT" value={money(totalOut)} tone="red" /><Metric icon={<ReceiptText />} label="Net Movement" value={`${money(Math.abs(totalIn - totalOut))} ${totalIn - totalOut >= 0 ? 'Cr' : 'Dr'}`} /><Metric icon={<CircleDollarSign />} label="Closing Balance" value={money(opening + totalIn - totalOut)} /></div><p className="text-sm font-semibold text-slate-500">Cashbook summary for {new Date(`-01T00:00:00`).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}</p><DataTable headers={['Date', 'Description', 'Category', 'Mode', 'Reference', 'Remarks', 'Credit', 'Debit', 'Running balance', 'Actions']}>{rows.map((entry) => <tr key={entry.id} className="border-t border-slate-100"><td className="p-3">{entry.date}</td><td className="p-3">{entry.description}{entry.source !== 'Manual' && <span className="ml-2 text-xs text-slate-400">Source: {entry.source}</span>}</td><td className="p-3">{entry.category || '-'}</td><td className="p-3">{entry.paymentMode || 'Cash'}</td><td className="p-3">{entry.reference || '-'}</td><td className="p-3">{entry.remarks || '-'}</td><td className="p-3 text-emerald-700">{entry.type === 'Credit' ? money(entry.amount) : '-'}</td><td className="p-3 text-rose-700">{entry.type === 'Debit' ? money(entry.amount) : '-'}</td><td className="p-3 font-bold">{money(entry.running)}</td><td className="p-3">{isAdmin && <div className="flex gap-1"><CompactAction title="Edit entry" disabled={!isAdmin} onClick={() => { setSelectedCashbookId(entry.id); setModal('editCashbook') }}><Edit3 size={14} /></CompactAction><CompactAction title="Delete entry and linked record" danger onClick={() => { setSelectedCashbookId(entry.id); setModal('confirmDeleteCashbook') }}><Trash2 size={14} /></CompactAction></div>}</td></tr>)}</DataTable><p className="text-xs text-slate-500">Deleting an entry also removes its linked source record and recalculates affected balances.</p></>}{financeTab === 'Expenses' && <><div className="grid gap-4 md:grid-cols-5">{['Grocery', 'Vegetables', 'Gas Cylinder', 'Staff Salary', 'Miscellaneous'].map((category) => <Card key={category}><p className="text-sm text-slate-500">{category}</p><p className="text-xl font-black">{money(scoped.expenses.filter((expense) => expense.category === category).reduce((sum, expense) => sum + expense.amount, 0))}</p></Card>)}</div><Button tone="red" onClick={() => setModal('expense')}><Plus size={16} /> Add Expense</Button><DataTable headers={['Date', 'Category', 'Description', 'Amount', 'Vendor/note']}>{scoped.expenses.map((expense) => <tr key={expense.id} className="border-t border-slate-100"><td className="p-3">{expense.date}</td><td className="p-3">{expense.category}</td><td className="p-3">{expense.description}</td><td className="p-3 text-rose-700">{money(expense.amount)}</td><td className="p-3">{expense.vendor}</td></tr>)}</DataTable></>}{financeTab === 'Bill Creator' && <BillCreator scoped={scoped} data={data} branch={branch} setSelectedTenantId={setSelectedTenantId} />}</div>
+  return <div className="grid gap-4"><Tabs values={['Cashbook', 'Expenses', 'Bill Creator']} value={financeTab} onChange={setFinanceTab} />{financeTab === 'Cashbook' && <><div className="no-print max-w-xs"><Field label="Month"><select className={inputClass} value={selectedMonth} onChange={(event) => setSelectedMonth(event.target.value)}>{months.map((month) => <option key={month} value={month}>{formatMonth(month)}</option>)}</select></Field></div><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5"><Metric icon={<CircleDollarSign />} label="Opening Balance" value={money(opening)} /><Metric icon={<IndianRupee />} label="Total IN" value={money(totalIn)} /><Metric icon={<ReceiptText />} label="Total OUT" value={money(totalOut)} tone="red" /><Metric icon={<ReceiptText />} label="Net Movement" value={`${money(Math.abs(totalIn - totalOut))} ${totalIn - totalOut >= 0 ? 'Cr' : 'Dr'}`} /><Metric icon={<CircleDollarSign />} label="Closing Balance" value={money(opening + totalIn - totalOut)} /></div><p className="text-sm font-semibold text-slate-500">Cashbook summary for {formatMonth(selectedMonth)}</p><DataTable headers={['Date', 'Description', 'Category', 'Mode', 'Reference', 'Remarks', 'Credit', 'Debit', 'Running balance', 'Actions']}>{rows.map((entry) => <tr key={entry.id} className="border-t border-slate-100"><td className="p-3">{entry.date}</td><td className="p-3">{entry.description}{entry.source !== 'Manual' && <span className="ml-2 text-xs text-slate-400">Source: {entry.source}</span>}</td><td className="p-3">{entry.category || '-'}</td><td className="p-3">{entry.paymentMode || 'Cash'}</td><td className="p-3">{entry.reference || '-'}</td><td className="p-3">{entry.remarks || '-'}</td><td className="p-3 text-emerald-700">{entry.type === 'Credit' ? money(entry.amount) : '-'}</td><td className="p-3 text-rose-700">{entry.type === 'Debit' ? money(entry.amount) : '-'}</td><td className="p-3 font-bold">{money(entry.running)}</td><td className="p-3">{isAdmin && <div className="flex gap-1"><CompactAction title="Edit entry" disabled={!isAdmin} onClick={() => { setSelectedCashbookId(entry.id); setModal('editCashbook') }}><Edit3 size={14} /></CompactAction><CompactAction title="Delete entry and linked record" danger onClick={() => { setSelectedCashbookId(entry.id); setModal('confirmDeleteCashbook') }}><Trash2 size={14} /></CompactAction></div>}</td></tr>)}</DataTable><p className="text-xs text-slate-500">Deleting an entry also removes its linked source record and recalculates affected balances.</p></>}{financeTab === 'Expenses' && <><div className="grid gap-4 md:grid-cols-5">{['Grocery', 'Vegetables', 'Gas Cylinder', 'Staff Salary', 'Miscellaneous'].map((category) => <Card key={category}><p className="text-sm text-slate-500">{category}</p><p className="text-xl font-black">{money(scoped.expenses.filter((expense) => expense.category === category).reduce((sum, expense) => sum + expense.amount, 0))}</p></Card>)}</div><Button tone="red" onClick={() => setModal('expense')}><Plus size={16} /> Add Expense</Button><DataTable headers={['Date', 'Category', 'Description', 'Amount', 'Vendor/note']}>{scoped.expenses.map((expense) => <tr key={expense.id} className="border-t border-slate-100"><td className="p-3">{expense.date}</td><td className="p-3">{expense.category}</td><td className="p-3">{expense.description}</td><td className="p-3 text-rose-700">{money(expense.amount)}</td><td className="p-3">{expense.vendor}</td></tr>)}</DataTable></>}{financeTab === 'Bill Creator' && <BillCreator scoped={scoped} data={data} branch={branch} setSelectedTenantId={setSelectedTenantId} />}</div>
 }
 
 function BillCreator({ scoped, data, branch, setSelectedTenantId }: { scoped: ReturnType<typeof branchData>; data: AppData; branch: Branch; setSelectedTenantId: (value: string) => void }) {
@@ -933,11 +962,12 @@ function AdmitTenantModal({ rooms, tenants, onClose, onSubmit }: { rooms: Room[]
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (saving) return
-    const form = new FormData(event.currentTarget)
+    const formElement = event.currentTarget
+    const form = new FormData(formElement)
     setSaving(true); setError('')
     try {
       await onSubmit(requestId, { name: String(form.get('name')), phone: String(form.get('phone')), email: String(form.get('email')), roomId, bedNo: nextBed, joiningDate: String(form.get('joiningDate')), dueDate: String(form.get('dueDate') || form.get('joiningDate')), monthlyRent: Number(form.get('monthlyRent')), security: Number(form.get('security')), electricity: String(form.get('electricity')) as 'Included' | 'Fixed', electricityAmount: Number(form.get('electricityAmount') || 0), idProof: String(form.get('idProof') || 'uploaded-id-proof') })
-      event.currentTarget.reset(); onClose()
+      formElement.reset(); onClose()
     } catch (failure) { setError(failure instanceof Error ? failure.message : 'Tenant could not be admitted.') }
     finally { setSaving(false) }
   }

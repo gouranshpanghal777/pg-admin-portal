@@ -30,6 +30,13 @@ const assert = (condition, label) => {
   console.log(`PASS ${label}`)
 }
 
+const qaBranchGuard = (branch, expectedId) => {
+  if (branch.id !== expectedId || branch.name.trim().toLowerCase() !== 'pg 95' || branch.name.toLowerCase().includes('farukhnagar') || branch.address.toLowerCase().includes('farukhnagar')) throw new Error('QA SAFETY STOP')
+}
+qaBranchGuard({ id: 'qa-branch', name: 'PG 95', address: 'sec 95' }, 'qa-branch')
+assert(true, '0. QA branch guard accepts only the exact PG 95 test branch')
+assert((() => { try { qaBranchGuard({ id: 'protected', name: 'PG 95 Farukhnagar', address: 'Haily Mandi Road, Farukhnagar' }, 'protected'); return false } catch { return true } })(), '0a. QA branch guard blocks Farukhnagar mutations')
+
 let data = {
   branches: [{ id: 'b1', name: 'PG 95 - Sector 45' }, { id: 'b2', name: 'PG 95 - Cyber City' }],
   rooms: [
@@ -75,6 +82,8 @@ assert(data.payments.length === 2 && data.cashbook.length === 2, '4. Combined su
 assert(due(tenant) - tenant.paidThisMonth === 500 && tenant.security - tenant.securityReceived === 500, '5. Rent and security balances remain independently ₹500')
 assert(securityReceived === 2000 && paymentTotal(data.payments, selectedBranch, '2026-06', 'Rent') === 6000, '5a. Reload-shaped payment rows preserve split totals')
 assert(paymentTotal(data.payments, selectedBranch, '2026-06', 'Security Deposit') === 2000 && summarize(data, selectedBranch).revenue === 8000, '5b. Monthly collection and cashbook total ₹8000')
+const receivedInMonth = (payments, month) => payments.filter((payment) => payment.date?.startsWith(month)).reduce((sum, payment) => sum + payment.amount, 0)
+assert(receivedInMonth([{ amount: 6500, month: '2026-05', date: '2026-07-03' }], '2026-07') === 6500, '5b-a. Collection month uses payment date, not rent billing period')
 
 const handledRequests = new Set(['initial-payment-request'])
 const retryRequest = 'initial-payment-request'
@@ -189,6 +198,7 @@ const calculatedRentDueDate = (tenant, payments, throughMonth) => {
 }
 assert(monthlyDue('2025-03-05', '2026-07-03') === '2026-07-05', '14h. Upcoming rent uses recurring monthly due day')
 assert(monthlyDue('2025-01-31', '2026-02-03') === '2026-02-28', '14i. Monthly due date handles short months')
+assert(daysUntil('2026-06-20') < 0, '14i-0. Arrived due dates remain overdue rather than upcoming')
 const dueDateTestTenant = { id: 'due-date-test', joiningDate: '2026-02-12', monthlyRent: 6500 }
 const dueDateTestPayments = ['2026-02', '2026-03', '2026-04'].map((month) => ({ tenantId: dueDateTestTenant.id, paymentType: 'Rent', month, amount: 6500 }))
 assert(calculatedRentDueDate(dueDateTestTenant, dueDateTestPayments, '2026-05') === '2026-05-12', '14i-a. Feb/Mar/Apr paid tenant calculates earliest unpaid due date as 2026-05-12')
