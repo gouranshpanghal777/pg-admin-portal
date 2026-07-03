@@ -178,6 +178,19 @@ const monthlyDue = (originalDate, referenceDate) => {
 }
 assert(monthlyDue('2025-03-05', '2026-07-03') === '2026-07-05', '14h. Upcoming rent uses recurring monthly due day')
 assert(monthlyDue('2025-01-31', '2026-02-03') === '2026-02-28', '14i. Monthly due date handles short months')
+const earliestUnpaid = (periods) => periods.find((item) => item.received + item.advance < item.agreed)
+const rentTimeline = [
+  { period: '2026-02', agreed: 6500, received: 6500, advance: 0 },
+  { period: '2026-03', agreed: 6500, received: 6500, advance: 0 },
+  { period: '2026-04', agreed: 6500, received: 6500, advance: 0 },
+  { period: '2026-05', agreed: 6500, received: 6000, advance: 0 },
+  { period: '2026-06', agreed: 6500, received: 6500, advance: 0 },
+]
+assert(earliestUnpaid(rentTimeline).period === '2026-05', '14j. Later payment never skips an earlier partially paid month')
+rentTimeline[3].received += 500
+assert(earliestUnpaid(rentTimeline) === undefined, '14k. Clearing partial rent advances beyond all settled months')
+const advanceTimeline = [{ period: '2026-05', agreed: 6500, received: 6000, advance: 500 }]
+assert(earliestUnpaid(advanceTimeline) === undefined, '14l. Applied advance settles rent without creating fake payment')
 
 const canEditFinancial = (role) => role === 'Admin'
 assert(canEditFinancial('Staff') === false, '15. Staff login edit/delete restrictions enforced')
