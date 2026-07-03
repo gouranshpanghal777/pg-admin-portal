@@ -245,7 +245,8 @@ export type AppData = {
 }
 const emptyAppData = (): AppData => ({ branches: [], users: [], tenants: [], rooms: [], payments: [], cashbook: [], expenses: [], inventory: [], purchases: [], tickets: [], invoices: [], activityLogs: [], obligations: [], securityLedger: [], advances: [] })
 
-const today = new Date().toISOString().slice(0, 10)
+const localDateValue = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+const today = localDateValue(new Date())
 const currentMonth = today.slice(0, 7)
 const money = (value: number) => `₹${value.toLocaleString('en-IN')}`
 const formatDate = (value?: string) => value ? value.slice(0, 10).split('-').reverse().join('/') : '-'
@@ -253,6 +254,12 @@ const formatDateTime = (value: string) => new Intl.DateTimeFormat('en-GB', { dat
 const uid = (_prefix: string) => crypto.randomUUID()
 const daysUntil = (date: string) =>
   Math.ceil((new Date(`${date}T00:00:00`).getTime() - new Date(`${today}T00:00:00`).getTime()) / 86400000)
+const currentMonthRentDueDate = (dueDate: string, reference = today) => {
+  const dueDay = new Date(`${dueDate}T00:00:00`).getDate()
+  const current = new Date(`${reference}T00:00:00`)
+  const lastDay = new Date(current.getFullYear(), current.getMonth() + 1, 0).getDate()
+  return localDateValue(new Date(current.getFullYear(), current.getMonth(), Math.min(dueDay, lastDay)))
+}
 
 function logActivity(data: AppData, input: { userName: string; userId: string; userRole: Role; branchId: string; branchName: string; module: string; actionType: string; description: string; metadata?: Record<string, string | number> }): AppData {
   const log: ActivityLog = {
@@ -275,7 +282,7 @@ function paymentTotal(payments: Payment[], type?: Payment['paymentType'], tenant
 function getPaymentStatus(tenant: Tenant): PaymentStatus {
   const balance = Math.max(0, getTenantDue(tenant) - tenant.paidThisMonth)
   if (balance === 0) return 'Paid'
-  return daysUntil(tenant.dueDate) < 0 ? 'Overdue' : 'Pending'
+  return daysUntil(currentMonthRentDueDate(tenant.dueDate)) < 0 ? 'Overdue' : 'Pending'
 }
 
 function branchData(data: AppData, branchId: string) {
@@ -532,7 +539,7 @@ function App() {
   ]
   const searchHits = query ? searchPool.filter((item) => item.toLowerCase().includes(query.toLowerCase())).slice(0, 6) : []
   const notifications = [
-    ...scoped.activeTenants.filter((tenant) => daysUntil(tenant.dueDate) <= 3 && Math.max(0, getTenantDue(tenant) - tenant.paidThisMonth) > 0).map((tenant) => `${tenant.name}: rent ${daysUntil(tenant.dueDate) < 0 ? 'overdue' : 'due soon'}`),
+    ...scoped.activeTenants.filter((tenant) => daysUntil(currentMonthRentDueDate(tenant.dueDate)) <= 3 && Math.max(0, getTenantDue(tenant) - tenant.paidThisMonth) > 0).map((tenant) => `${tenant.name}: rent ${daysUntil(currentMonthRentDueDate(tenant.dueDate)) < 0 ? 'overdue' : 'due soon'}`),
     ...scoped.openTickets.map((ticket) => `Open maintenance: ${ticket.title}`),
     ...scoped.activeTenants.filter((tenant) => tenant.status === 'Notice').map((tenant) => `Vacating notice: ${tenant.name}`),
   ]
@@ -691,7 +698,7 @@ function Dashboard({ scoped, setModal, setPage, setTenantTab, setTenantFilter, s
   const monthlyExpenses = scoped.cashbook.filter((entry) => entry.date.startsWith(currentMonth) && entry.type === 'Debit').reduce((sum, entry) => sum + entry.amount, 0)
   const newAdmissions = scoped.activeTenants.filter((tenant) => tenant.joiningDate.startsWith(currentMonth)).length
   const vacatedThisMonth = scoped.leftTenants.filter((tenant) => tenant.left?.leftDate.startsWith(currentMonth)).length
-  const upcomingDue = scoped.activeTenants.filter((tenant) => daysUntil(tenant.dueDate) >= 0 && daysUntil(tenant.dueDate) <= 3).length
+  const upcomingDue = scoped.activeTenants.filter((tenant) => { const days = daysUntil(currentMonthRentDueDate(tenant.dueDate)); return days >= 0 && days <= 3 && getPaymentStatus(tenant) !== 'Paid' }).length
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'].map((month, index) => ({
     month,
     collected: Math.round(scoped.revenue * (0.65 + index * 0.07)),

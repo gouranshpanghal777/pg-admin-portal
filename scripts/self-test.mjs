@@ -169,6 +169,15 @@ const advanceMovements = [{ type: 'credit', amount: 1000 }, { type: 'used', amou
 assert(advanceMovements.reduce((sum, item) => sum + (item.type === 'credit' ? item.amount : -item.amount), 0) === 350, '14f. Advance remaining derives from credit and usage ledger')
 const historicalJune = data.payments.filter((payment) => payment.month === '2026-06').reduce((sum, payment) => sum + payment.amount, 0)
 assert(historicalJune > 0 && data.tenants.some((item) => item.status === 'Left'), '14g. Vacating preserves historical ledger collections')
+const monthlyDue = (originalDate, referenceDate) => {
+  const dueDay = new Date(`${originalDate}T00:00:00`).getDate()
+  const reference = new Date(`${referenceDate}T00:00:00`)
+  const lastDay = new Date(reference.getFullYear(), reference.getMonth() + 1, 0).getDate()
+  const result = new Date(reference.getFullYear(), reference.getMonth(), Math.min(dueDay, lastDay))
+  return `${result.getFullYear()}-${String(result.getMonth() + 1).padStart(2, '0')}-${String(result.getDate()).padStart(2, '0')}`
+}
+assert(monthlyDue('2025-03-05', '2026-07-03') === '2026-07-05', '14h. Upcoming rent uses recurring monthly due day')
+assert(monthlyDue('2025-01-31', '2026-02-03') === '2026-02-28', '14i. Monthly due date handles short months')
 
 const canEditFinancial = (role) => role === 'Admin'
 assert(canEditFinancial('Staff') === false, '15. Staff login edit/delete restrictions enforced')
