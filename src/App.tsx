@@ -3,6 +3,7 @@ import type { FormEvent, ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase, supabaseConfigured } from './lib/supabase'
 import { admitTenant, createStaffAccount, deactivateStaffAccount, deleteCashbookEntryCascade, deleteTenantWithPayments, loadAppData, persistAppData, recordSplitPayment, vacateTenantErp } from './lib/database'
+import { importedRentPaidMonths } from './data/farukhnagarRentRegister'
 import {
   AlertTriangle,
   Bell,
@@ -277,24 +278,33 @@ const periodsBetween = (start: string, end: string) => {
   for (let period = start; period <= end; period = nextPeriod(period)) periods.push(period)
   return periods
 }
-function rentLedgerState(tenant: Tenant, obligations: PaymentObligation[], payments: Payment[]) {
+function getRentLedgerState(tenant: Tenant, payments: Payment[], obligations: PaymentObligation[] = []) {
   const rentObligations = obligations.filter((item) => item.tenantId === tenant.id && item.paymentType === 'Rent')
   const joiningMonth = tenant.joiningDate.slice(0, 7)
+  const importedPaidMonths = importedRentPaidMonths[tenant.name.trim().toUpperCase()] || []
   for (const period of periodsBetween(joiningMonth, currentMonth)) {
     const obligation = rentObligations.find((item) => item.period === period)
-    const received = obligation?.received ?? payments.filter((payment) => payment.tenantId === tenant.id && payment.paymentType === 'Rent' && payment.month === period).reduce((sum, payment) => sum + payment.amount, 0)
+    const recordedPayments = payments.filter((payment) => payment.tenantId === tenant.id && payment.paymentType === 'Rent' && payment.month === period).reduce((sum, payment) => sum + payment.amount, 0)
     const agreed = obligation?.agreed ?? tenant.monthlyRent
+    const received = Math.max(obligation?.received ?? 0, recordedPayments, importedPaidMonths.includes(period) ? agreed : 0)
     const advanceApplied = obligation?.advanceApplied ?? 0
     const pending = Math.max(0, agreed - received - advanceApplied)
     if (pending > 0) {
-      const dueDate = rentDueDateForPeriod(tenant.dueDate, period)
+      const dueDate = rentDueDateForPeriod(tenant.joiningDate, period)
       return { period, paidThroughMonth: period === joiningMonth ? '-' : periodsBetween(joiningMonth, period).slice(-2, -1)[0] || '-', dueDate, agreed, received, advanceApplied, pending, status: (dueDate < today ? 'Overdue' : dueDate === today ? 'Pending' : 'Upcoming') as RentLedgerStatus }
     }
   }
   const period = nextPeriod(currentMonth)
-  const dueDate = rentDueDateForPeriod(tenant.dueDate, period)
+  const dueDate = rentDueDateForPeriod(tenant.joiningDate, period)
   return { period, paidThroughMonth: currentMonth, dueDate, agreed: tenant.monthlyRent, received: 0, advanceApplied: 0, pending: 0, status: (daysUntil(dueDate) <= 3 ? 'Upcoming' : 'Clear') as RentLedgerStatus }
 }
+
+function getCalculatedRentDueDate(tenant: Tenant, payments: Payment[], obligations: PaymentObligation[] = []) {
+  return getRentLedgerState(tenant, payments, obligations).dueDate
+}
+
+const rentLedgerState = (tenant: Tenant, obligations: PaymentObligation[], payments: Payment[]) =>
+  getRentLedgerState(tenant, payments, obligations)
 
 function logActivity(data: AppData, input: { userName: string; userId: string; userRole: Role; branchId: string; branchName: string; module: string; actionType: string; description: string; metadata?: Record<string, string | number> }): AppData {
   const log: ActivityLog = {
@@ -346,7 +356,7 @@ function branchData(data: AppData, branchId: string) {
   const closingBalance = openingBalance + netMovement
   const cashBalance = cashbook.reduce((sum, entry) => sum + (entry.type === 'Credit' ? entry.amount : -entry.amount), 0)
   const expected = activeTenants.reduce((sum, tenant) => sum + getTenantDue(tenant), 0)
-  const rentStates = new Map(activeTenants.map((tenant) => [tenant.id, rentLedgerState(tenant, obligations, payments)]))
+  const rentStates = new Map(activeTenants.map((tenant) => [tenant.id, getRentLedgerState(tenant, payments, obligations)]))
   const overdue = activeTenants.reduce((sum, tenant) => rentStates.get(tenant.id)?.status === 'Overdue' ? sum + (rentStates.get(tenant.id)?.pending || 0) : sum, 0)
   const pending = activeTenants.reduce((sum, tenant) => sum + (rentStates.get(tenant.id)?.pending || 0), 0)
   const openTickets = tickets.filter((ticket) => ticket.status !== 'Resolved')
@@ -798,13 +808,14 @@ function TenantsPage({ data, scoped, tenantTab, setTenantTab, filter, setFilter,
           {filtered.map((tenant) => {
             const room = data.rooms.find((item) => item.id === tenant.roomId)!
             const rentState = scoped.rentStates.get(tenant.id)!
+            const calculatedRentDueDate = getCalculatedRentDueDate(tenant, scoped.payments, scoped.obligations)
             const balance = rentState.pending
             const securityReceived = tenant.securityReceived
             const securityBalance = Math.max(0, tenant.security - tenant.securityReceived)
             const status = rentState.status
-            const whatsapp = `https://wa.me/91${tenant.phone}?text=${encodeURIComponent(`Hi ${tenant.name}, rent ${money(rentState.agreed)} for ${room.number} at ${data.branches.find((branch) => branch.id === tenant.branchId)?.name} is due on ${rentState.dueDate}. Balance: ${money(balance)}.`)}`
+            const whatsapp = `https://wa.me/91${tenant.phone}?text=${encodeURIComponent(`Hi ${tenant.name}, rent ${money(rentState.agreed)} for ${room.number} at ${data.branches.find((branch) => branch.id === tenant.branchId)?.name} is due on ${calculatedRentDueDate}. Balance: ${money(balance)}.`)}`
             return <tr key={tenant.id} className="border-t border-slate-100">
-              <td className="p-3 font-semibold">{tenant.name}</td><td className="p-3 text-sm">{tenant.email}<br />{tenant.phone}</td><td className="p-3">{room.number}</td><td className="p-3">{room.type}</td><td className="p-3">{money(tenant.monthlyRent)}</td><td className="p-3 text-emerald-700">{money(rentState.received + rentState.advanceApplied)}</td><td className="p-3 text-rose-700">{money(balance)}</td><td className="p-3">{money(tenant.security)}</td><td className="p-3 text-emerald-700">{money(securityReceived)}</td><td className="p-3">{securityBalance === 0 ? <Badge tone="green">Cleared</Badge> : money(securityBalance)}</td><td className="p-3">{tenant.electricity === 'Fixed' ? money(tenant.electricityAmount) : 'Included'}</td><td className="p-3">{formatDate(tenant.joiningDate)}</td><td className="p-3 font-semibold">{formatDate(rentState.dueDate)}</td><td className="p-3"><Badge tone={tenant.status === 'Notice' || tenant.status === 'Needs Verification' ? 'orange' : status === 'Clear' || status === 'Paid' ? 'green' : status === 'Overdue' ? 'red' : 'orange'}>{tenant.status === 'Notice' || tenant.status === 'Needs Verification' ? tenant.status : status}</Badge></td>
+              <td className="p-3 font-semibold">{tenant.name}</td><td className="p-3 text-sm">{tenant.email}<br />{tenant.phone}</td><td className="p-3">{room.number}</td><td className="p-3">{room.type}</td><td className="p-3">{money(tenant.monthlyRent)}</td><td className="p-3 text-emerald-700">{money(rentState.received + rentState.advanceApplied)}</td><td className="p-3 text-rose-700">{money(balance)}</td><td className="p-3">{money(tenant.security)}</td><td className="p-3 text-emerald-700">{money(securityReceived)}</td><td className="p-3">{securityBalance === 0 ? <Badge tone="green">Cleared</Badge> : money(securityBalance)}</td><td className="p-3">{tenant.electricity === 'Fixed' ? money(tenant.electricityAmount) : 'Included'}</td><td className="p-3">{formatDate(tenant.joiningDate)}</td><td className="p-3 font-semibold">{formatDate(calculatedRentDueDate)}</td><td className="p-3"><Badge tone={tenant.status === 'Notice' || tenant.status === 'Needs Verification' ? 'orange' : status === 'Clear' || status === 'Paid' ? 'green' : status === 'Overdue' ? 'red' : 'orange'}>{tenant.status === 'Notice' || tenant.status === 'Needs Verification' ? tenant.status : status}</Badge></td>
               <td className="p-3"><div className="flex min-w-max items-center gap-1"><CompactAction title="View" onClick={() => alert(`${tenant.name}\nRoom ${room.number}\nID: ${tenant.idProof}`)}><Eye size={14} /></CompactAction>{isAdmin && <CompactAction title="Edit" onClick={() => { setSelectedTenantId(tenant.id); setModal('editTenant') }}><Edit3 size={14} /></CompactAction>}{canAction('move_tenant') && <CompactAction title="Move" onClick={() => { setSelectedTenantId(tenant.id); setModal('moveTenant') }}><Home size={14} /></CompactAction>}{canAction('add_payment') && <CompactAction title="Add Payment" onClick={() => { setSelectedTenantId(tenant.id); setModal('payment') }}><IndianRupee size={14} /></CompactAction>}<a title="WhatsApp Reminder" aria-label="WhatsApp Reminder" className="grid h-8 w-8 place-items-center rounded-md border border-slate-200 text-emerald-700 hover:bg-emerald-50" href={whatsapp} target="_blank"><MessageCircle size={14} /></a><CompactAction title="Notice" onClick={() => { setSelectedTenantId(tenant.id); setModal('notice') }}><CalendarClock size={14} /></CompactAction>{canAction('vacate_tenant') && <CompactAction title="Vacate" onClick={() => { setSelectedTenantId(tenant.id); setModal('vacate') }}><LogOut size={14} /></CompactAction>}{isAdmin && <CompactAction title="Delete" danger onClick={() => { setSelectedTenantId(tenant.id); setModal('confirmDeleteTenant') }}><Trash2 size={14} /></CompactAction>}</div></td>
             </tr>
           })}
@@ -847,7 +858,7 @@ function BillCreator({ scoped, data, branch, setSelectedTenantId }: { scoped: Re
   const tenant = scoped.activeTenants.find((item) => item.id === tenantId)
   const room = tenant ? data.rooms.find((item) => item.id === tenant.roomId) : undefined
   if (!tenant || !room) return <Card>No tenant available for invoice generation.</Card>
-  const rentState = scoped.rentStates.get(tenant.id) || rentLedgerState(tenant, scoped.obligations, scoped.payments)
+  const rentState = scoped.rentStates.get(tenant.id) || getRentLedgerState(tenant, scoped.payments, scoped.obligations)
   const balance = rentState.pending
   const electricity = tenant.electricity === 'Fixed' ? tenant.electricityAmount : 0
   const status = rentState.status
@@ -946,7 +957,7 @@ function PaymentModal({ tenants, payments, obligations, selectedTenantId, onClos
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const tenant = tenants.find((item) => item.id === tenantId)
-  const rentState = tenant ? rentLedgerState(tenant, obligations, payments) : undefined
+  const rentState = tenant ? getRentLedgerState(tenant, payments, obligations) : undefined
   const rentBalance = rentState?.pending || 0
   const securityReceived = tenant ? Math.max(tenant.securityReceived || 0, paymentTotal(payments, 'Security Deposit', tenant.id, null)) : 0
   const securityBalance = tenant ? Math.max(0, tenant.security - securityReceived) : 0

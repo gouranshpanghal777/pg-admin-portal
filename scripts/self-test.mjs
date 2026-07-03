@@ -176,8 +176,22 @@ const monthlyDue = (originalDate, referenceDate) => {
   const result = new Date(reference.getFullYear(), reference.getMonth(), Math.min(dueDay, lastDay))
   return `${result.getFullYear()}-${String(result.getMonth() + 1).padStart(2, '0')}-${String(result.getDate()).padStart(2, '0')}`
 }
+const calculatedRentDueDate = (tenant, payments, throughMonth) => {
+  for (let period = tenant.joiningDate.slice(0, 7); period <= throughMonth;) {
+    const received = payments.filter((payment) => payment.tenantId === tenant.id && payment.paymentType === 'Rent' && payment.month === period).reduce((sum, payment) => sum + payment.amount, 0)
+    if (received < tenant.monthlyRent) return monthlyDue(tenant.joiningDate, `${period}-01`)
+    const [year, month] = period.split('-').map(Number)
+    const next = new Date(year, month, 1)
+    period = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}`
+  }
+  const [year, month] = throughMonth.split('-').map(Number)
+  return monthlyDue(tenant.joiningDate, `${year}-${String(month + 1).padStart(2, '0')}-01`)
+}
 assert(monthlyDue('2025-03-05', '2026-07-03') === '2026-07-05', '14h. Upcoming rent uses recurring monthly due day')
 assert(monthlyDue('2025-01-31', '2026-02-03') === '2026-02-28', '14i. Monthly due date handles short months')
+const dueDateTestTenant = { id: 'due-date-test', joiningDate: '2026-02-12', monthlyRent: 6500 }
+const dueDateTestPayments = ['2026-02', '2026-03', '2026-04'].map((month) => ({ tenantId: dueDateTestTenant.id, paymentType: 'Rent', month, amount: 6500 }))
+assert(calculatedRentDueDate(dueDateTestTenant, dueDateTestPayments, '2026-05') === '2026-05-12', '14i-a. Feb/Mar/Apr paid tenant calculates earliest unpaid due date as 2026-05-12')
 const earliestUnpaid = (periods) => periods.find((item) => item.received + item.advance < item.agreed)
 const rentTimeline = [
   { period: '2026-02', agreed: 6500, received: 6500, advance: 0 },
