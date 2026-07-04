@@ -178,6 +178,21 @@ export async function admitTenant(input: { requestId: string; branchId: string; 
   return data as string
 }
 
+export async function updateUnsettledTenantRent(tenantId: string, monthlyRent: number) {
+  const { data: obligations, error: loadError } = await supabase.from('payment_obligations').select('id, received_amount, advance_applied, agreed_amount').eq('tenant_id', tenantId).eq('payment_type', 'rent')
+  if (loadError) throw databaseError('load rent obligations for tenant edit', loadError)
+  const unsettled = (obligations || []).filter((item) => Number(item.received_amount || 0) + Number(item.advance_applied || 0) < Number(item.agreed_amount || 0))
+  for (const obligation of unsettled) {
+    const received = Number(obligation.received_amount || 0)
+    const advanceApplied = Number(obligation.advance_applied || 0)
+    const { error } = await supabase.from('payment_obligations').update({
+      agreed_amount: monthlyRent,
+      status: received + advanceApplied >= monthlyRent ? 'Paid' : received + advanceApplied > 0 ? 'Partial' : 'Pending',
+    }).eq('id', obligation.id)
+    if (error) throw databaseError('update unsettled rent obligation', error)
+  }
+}
+
 export async function deleteTenantWithPayments(tenantId: string) {
   const { data, error } = await supabase.rpc('delete_tenant_with_payments', { p_tenant_id: tenantId })
   if (error) throw databaseError('delete_tenant_with_payments RPC', error)
