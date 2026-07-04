@@ -184,6 +184,46 @@ export async function vacateTenantErp(tenantId: string, left: { leftDate: string
   return data
 }
 
+export async function undoVacateTenant(tenantId: string) {
+  const [{ data: tenant, error: tenantError }, { data: auth, error: authError }] = await Promise.all([
+    supabase.from('tenants').select('*, rooms!inner(id, number, beds, status), branches!inner(name)').eq('id', tenantId).single(),
+    supabase.auth.getUser(),
+  ])
+  if (tenantError) throw databaseError('load vacated tenant', tenantError)
+  if (authError || !auth.user) throw authError || new Error('Signed-in user not found')
+  if (tenant.status !== 'Left' || !tenant.left_details) throw new Error('Only a vacated tenant can be restored.')
+  if (tenant.rooms.status === 'Maintenance') throw new Error(`Room ${tenant.rooms.number} is under maintenance. Make it available before undoing vacate.`)
+  const { data: occupants, error: occupantError } = await supabase.from('tenants').select('bed_no').eq('room_id', tenant.room_id).in('status', ['Active', 'Notice'])
+  if (occupantError) throw databaseError('check original room capacity', occupantError)
+  if ((occupants?.length || 0) >= tenant.rooms.beds) throw new Error(`Room ${tenant.rooms.number} has no vacant bed. Move another tenant or admit this tenant to a different room.`)
+  const occupiedBeds = new Set((occupants || []).map((item) => Number(item.bed_no)))
+  const bedNo = Array.from({ length: tenant.rooms.beds }, (_, index) => index + 1).find((bed) => !occupiedBeds.has(bed)) || tenant.bed_no
+  const leftDate = String(tenant.left_details.leftDate)
+  const { data: movements, error: movementError } = await supabase.from('security_ledger').select('id, movement_type, cashbook_entry_id').eq('tenant_id', tenantId).eq('movement_date', leftDate).in('movement_type', ['refunded', 'deducted'])
+  if (movementError) throw databaseError('load vacating settlement', movementError)
+
+  const { error: restoreError } = await supabase.from('tenants').update({ status: 'Active', left_details: null, notice: null, bed_no: bedNo, updated_by: auth.user.id }).eq('id', tenantId).eq('status', 'Left')
+  if (restoreError) throw databaseError('undo tenant vacate', restoreError)
+  const cashbookIds = (movements || []).map((item) => item.cashbook_entry_id).filter(Boolean)
+  if (cashbookIds.length) {
+    const { error } = await supabase.from('cashbook_entries').delete().in('id', cashbookIds)
+    if (error) throw databaseError('reverse security refund cashbook entries', error)
+  }
+  if (movements?.length) {
+    const { error } = await supabase.from('security_ledger').delete().in('id', movements.map((item) => item.id))
+    if (error) throw databaseError('reverse vacating security ledger', error)
+  }
+  await supabase.from('rooms').update({ status: 'Occupied', updated_by: auth.user.id }).eq('id', tenant.room_id)
+  const { data: profile } = await supabase.from('profiles').select('name, role').eq('id', auth.user.id).single()
+  const { error: logError } = await supabase.from('activity_logs').insert({
+    branch_id: tenant.branch_id, branch_name: tenant.branches.name, user_id: auth.user.id,
+    user_name: profile?.name || 'Admin', user_role: profile?.role || 'admin', module: 'Tenants', action_type: 'Undo Vacate',
+    description: `Admin ${profile?.name || ''} restored ${tenant.name} to Room ${tenant.rooms.number} Bed ${bedNo} and reversed the vacating settlement.`,
+    metadata: { tenant_id: tenantId, room_id: tenant.room_id, bed_no: bedNo, original_left_date: leftDate },
+  })
+  if (logError) throw databaseError('log undo vacate', logError)
+}
+
 export async function createStaffAccount(payload: { id?: string; name: string; phone?: string; email?: string; username?: string; password?: string; branchIds: string[]; permissions: string[] }) {
   const { data, error } = await supabase.functions.invoke('create-staff', { body: payload })
   if (error) throw error
