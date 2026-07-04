@@ -178,9 +178,11 @@ export async function deleteCashbookEntryCascade(cashbookId: string) {
   return data as { cashbook_id: string; linked_entity_deleted: string }
 }
 
-export async function vacateTenantErp(tenantId: string, left: { leftDate: string; reason: string; finalRentBalance: number; electricityBalance: number; maintenanceDeduction: number; securityRefund: number }) {
+export async function vacateTenantErp(tenantId: string, left: { leftDate: string; reason: string; finalRentBalance: number; electricityBalance: number; maintenanceDeduction: number; securityRefund: number; finalSettlement?: number; extraDays?: number; extraRentCharge?: number; settlementReceived?: number }) {
   const { data, error } = await supabase.rpc('vacate_tenant_erp', { p_tenant_id: tenantId, p_left_date: left.leftDate, p_reason: left.reason, p_final_rent_balance: left.finalRentBalance, p_electricity_balance: left.electricityBalance, p_maintenance_deduction: left.maintenanceDeduction, p_security_refund: left.securityRefund })
   if (error) throw databaseError('vacate_tenant_erp RPC', error)
+  const { error: detailsError } = await supabase.from('tenants').update({ left_details: left }).eq('id', tenantId).eq('status', 'Left')
+  if (detailsError) throw databaseError('save vacate settlement details', detailsError)
   return data
 }
 
