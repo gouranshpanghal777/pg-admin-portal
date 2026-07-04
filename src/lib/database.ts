@@ -82,6 +82,7 @@ const databaseError = (operation: string, error: { message?: string; code?: stri
 }
 
 export async function recordSplitPayment(input: { requestId: string; tenantId: string; branchId: string; rentAmount: number; securityAmount: number; electricityAmount: number; otherAmount: number; paymentDate: string; paymentMode: string; description: string }) {
+  const requestStartedAt = new Date(Date.now() - 10_000).toISOString()
   const { data, error } = await supabase.rpc('record_split_payment_v2', {
     p_request_id: input.requestId,
     p_tenant_id: input.tenantId,
@@ -95,7 +96,61 @@ export async function recordSplitPayment(input: { requestId: string; tenantId: s
     p_description: input.description || null,
   })
   if (error) throw databaseError('record_split_payment_v2 RPC', error)
+  if (input.rentAmount > 0) await repairFutureRoutedRentPayment(input, requestStartedAt)
   return data
+}
+
+async function repairFutureRoutedRentPayment(input: { tenantId: string; branchId: string; rentAmount: number; paymentDate: string }, requestStartedAt: string) {
+  const intendedPeriod = input.paymentDate.slice(0, 7)
+  const { data: payments, error: paymentLookupError } = await supabase.from('payments')
+    .select('id, month')
+    .eq('tenant_id', input.tenantId)
+    .eq('branch_id', input.branchId)
+    .eq('payment_type', 'rent')
+    .eq('payment_date', input.paymentDate)
+    .eq('amount', input.rentAmount)
+    .gte('created_at', requestStartedAt)
+    .order('created_at', { ascending: false })
+    .limit(1)
+  if (paymentLookupError) throw databaseError('verify rent payment allocation', paymentLookupError)
+  const payment = payments?.[0]
+  if (!payment || payment.month <= intendedPeriod) return
+
+  const [{ data: tenant, error: tenantError }, { data: obligations, error: obligationError }, { data: auth }] = await Promise.all([
+    supabase.from('tenants').select('monthly_rent, due_date').eq('id', input.tenantId).eq('branch_id', input.branchId).single(),
+    supabase.from('payment_obligations').select('*').eq('tenant_id', input.tenantId).eq('payment_type', 'rent').in('period', [intendedPeriod, payment.month]),
+    supabase.auth.getUser(),
+  ])
+  if (tenantError) throw databaseError('load tenant for rent allocation', tenantError)
+  if (obligationError) throw databaseError('load rent obligations', obligationError)
+  const future = obligations?.find((item) => item.period === payment.month)
+  const intended = obligations?.find((item) => item.period === intendedPeriod)
+  const intendedReceived = Number(intended?.received_amount || 0) + input.rentAmount
+  const futureReceived = Math.max(0, Number(future?.received_amount || 0) - input.rentAmount)
+  const dueDay = new Date(`${tenant.due_date}T00:00:00`).getDate()
+  const [year, month] = intendedPeriod.split('-').map(Number)
+  const dueDate = `${intendedPeriod}-${String(Math.min(dueDay, new Date(year, month, 0).getDate())).padStart(2, '0')}`
+
+  const { error: paymentUpdateError } = await supabase.from('payments').update({ month: intendedPeriod }).eq('id', payment.id)
+  if (paymentUpdateError) throw databaseError('correct rent payment month', paymentUpdateError)
+  const intendedRow = {
+    id: intended?.id || crypto.randomUUID(), branch_id: input.branchId, tenant_id: input.tenantId,
+    period: intendedPeriod, payment_type: 'rent', agreed_amount: Number(intended?.agreed_amount || tenant.monthly_rent),
+    received_amount: intendedReceived, advance_applied: Number(intended?.advance_applied || 0), due_date: intended?.due_date || dueDate,
+    status: intendedReceived + Number(intended?.advance_applied || 0) >= Number(intended?.agreed_amount || tenant.monthly_rent) ? 'Paid' : 'Partial',
+    created_by: intended?.created_by || auth.user?.id,
+  }
+  const { error: intendedError } = await supabase.from('payment_obligations').upsert(intendedRow)
+  if (intendedError) throw databaseError('correct intended rent obligation', intendedError)
+  if (future) {
+    const futureAgreed = Number(future.agreed_amount || tenant.monthly_rent)
+    const futureAdvance = Number(future.advance_applied || 0)
+    const { error: futureError } = await supabase.from('payment_obligations').update({
+      received_amount: futureReceived,
+      status: futureReceived + futureAdvance >= futureAgreed ? 'Paid' : futureReceived + futureAdvance > 0 ? 'Partial' : 'Pending',
+    }).eq('id', future.id)
+    if (futureError) throw databaseError('restore future rent obligation', futureError)
+  }
 }
 
 export async function admitTenant(input: { requestId: string; branchId: string; name: string; phone: string; email: string; roomId: string; bedNo: number; joiningDate: string; dueDate: string; monthlyRent: number; security: number; electricity: string; electricityAmount: number; idProof: string }) {
