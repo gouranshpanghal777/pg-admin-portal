@@ -1,4 +1,5 @@
 import type { AppData } from '../App'
+import { importedRentPaidMonths } from '../data/farukhnagarRentRegister'
 import { supabase } from './supabase'
 
 const empty: AppData = { branches: [], users: [], tenants: [], rooms: [], payments: [], cashbook: [], expenses: [], inventory: [], purchases: [], tickets: [], invoices: [], activityLogs: [], obligations: [], securityLedger: [], advances: [] }
@@ -184,9 +185,61 @@ export async function deleteTenantWithPayments(tenantId: string) {
 }
 
 export async function deleteCashbookEntryCascade(cashbookId: string) {
+  const { data: entry, error: entryError } = await supabase.from('cashbook_entries').select('source, linked_id').eq('id', cashbookId).single()
+  if (entryError) throw databaseError('load cashbook entry before delete', entryError)
+  let rentTenantId: string | undefined
+  if (entry.source === 'Payment' && entry.linked_id) {
+    const { data: payment, error: paymentError } = await supabase.from('payments').select('tenant_id, payment_type').eq('id', entry.linked_id).maybeSingle()
+    if (paymentError) throw databaseError('load linked payment before delete', paymentError)
+    if (payment && String(payment.payment_type).toLowerCase() === 'rent') rentTenantId = payment.tenant_id
+  }
   const { data, error } = await supabase.rpc('delete_cashbook_entry_cascade', { p_cashbook_id: cashbookId })
   if (error) throw databaseError('delete_cashbook_entry_cascade RPC', error)
+  if (rentTenantId) await rebuildTenantRentObligations(rentTenantId)
   return data as { cashbook_id: string; linked_entity_deleted: string }
+}
+
+async function rebuildTenantRentObligations(tenantId: string) {
+  const [{ data: tenant, error: tenantError }, { data: payments, error: paymentError }, { data: obligations, error: obligationError }, { data: auth }] = await Promise.all([
+    supabase.from('tenants').select('branch_id, name, monthly_rent, joining_date, due_date, branches!inner(name)').eq('id', tenantId).single(),
+    supabase.from('payments').select('amount, payment_date, created_at').eq('tenant_id', tenantId).eq('payment_type', 'rent').order('payment_date').order('created_at'),
+    supabase.from('payment_obligations').select('*').eq('tenant_id', tenantId).eq('payment_type', 'rent').order('period'),
+    supabase.auth.getUser(),
+  ])
+  if (tenantError) throw databaseError('load tenant while rebuilding rent ledger', tenantError)
+  if (paymentError) throw databaseError('load payments while rebuilding rent ledger', paymentError)
+  if (obligationError) throw databaseError('load obligations while rebuilding rent ledger', obligationError)
+  const tenantBranches = tenant.branches as unknown as { name: string } | Array<{ name: string }> | null
+  const branchName = Array.isArray(tenantBranches) ? tenantBranches[0]?.name : tenantBranches?.name
+  const isFarukhnagar = branchName === 'PG 95 Farukhnagar'
+  const importedPaid = new Set(isFarukhnagar ? importedRentPaidMonths[tenant.name.trim().toUpperCase()] || [] : [])
+  const existingByPeriod = new Map((obligations || []).map((item) => [item.period, item]))
+  const nextPeriod = (period: string) => { const [year, month] = period.split('-').map(Number); const date = new Date(year, month, 1); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}` }
+  const dueDay = new Date(`${tenant.due_date}T00:00:00`).getDate()
+  const dueDateFor = (period: string) => { const [year, month] = period.split('-').map(Number); return `${period}-${String(Math.min(dueDay, new Date(year, month, 0).getDate())).padStart(2, '0')}` }
+  let paymentPool = (payments || []).reduce((sum, payment) => sum + Number(payment.amount || 0), 0)
+  let period = tenant.joining_date.slice(0, 7)
+  const currentPeriod = new Date().toISOString().slice(0, 7)
+  const lastExistingPeriod = (obligations || []).at(-1)?.period || currentPeriod
+  const rows = []
+  for (let index = 0; index < 240 && (period <= currentPeriod || period <= lastExistingPeriod || paymentPool > 0); index += 1, period = nextPeriod(period)) {
+    const existing = existingByPeriod.get(period)
+    const agreed = Number(existing?.agreed_amount || tenant.monthly_rent)
+    const received = importedPaid.has(period) ? agreed : Math.min(paymentPool, agreed)
+    if (!importedPaid.has(period)) paymentPool -= received
+    rows.push({
+      id: existing?.id || crypto.randomUUID(), branch_id: tenant.branch_id, tenant_id: tenantId, period,
+      payment_type: 'rent', agreed_amount: agreed, received_amount: received, advance_applied: 0,
+      due_date: existing?.due_date || dueDateFor(period), status: received >= agreed ? 'Paid' : received > 0 ? 'Partial' : 'Pending',
+      created_by: existing?.created_by || auth.user?.id,
+    })
+  }
+  const { error: rebuildError } = await supabase.from('payment_obligations').upsert(rows)
+  if (rebuildError) throw databaseError('rebuild rent obligations after delete', rebuildError)
+  const { error: normalizeError } = await supabase.from('payment_obligations').upsert(rows.map((row) => ({ ...row, advance_applied: 0 })))
+  if (normalizeError) throw databaseError('normalize rebuilt rent obligations', normalizeError)
+  const currentRentReceived = (payments || []).filter((payment) => payment.payment_date?.slice(0, 7) === currentPeriod).reduce((sum, payment) => sum + Number(payment.amount || 0), 0)
+  await supabase.from('tenants').update({ paid_this_month: currentRentReceived }).eq('id', tenantId)
 }
 
 export async function vacateTenantErp(tenantId: string, left: { leftDate: string; reason: string; finalRentBalance: number; electricityBalance: number; maintenanceDeduction: number; securityRefund: number; finalSettlement?: number; extraDays?: number; extraRentCharge?: number; settlementReceived?: number }) {
