@@ -81,7 +81,7 @@ const databaseError = (operation: string, error: { message?: string; code?: stri
   return result
 }
 
-export async function recordSplitPayment(input: { requestId: string; tenantId: string; branchId: string; rentAmount: number; securityAmount: number; electricityAmount: number; otherAmount: number; paymentDate: string; paymentMode: string; description: string }) {
+export async function recordSplitPayment(input: { requestId: string; tenantId: string; branchId: string; rentAmount: number; securityAmount: number; electricityAmount: number; otherAmount: number; paymentDate: string; rentPeriod?: string; paymentMode: string; description: string }) {
   const requestStartedAt = new Date(Date.now() - 10_000).toISOString()
   const { data, error } = await supabase.rpc('record_split_payment_v2', {
     p_request_id: input.requestId,
@@ -100,8 +100,8 @@ export async function recordSplitPayment(input: { requestId: string; tenantId: s
   return data
 }
 
-async function repairFutureRoutedRentPayment(input: { tenantId: string; branchId: string; rentAmount: number; paymentDate: string }, requestStartedAt: string) {
-  const intendedPeriod = input.paymentDate.slice(0, 7)
+async function repairFutureRoutedRentPayment(input: { tenantId: string; branchId: string; rentAmount: number; paymentDate: string; rentPeriod?: string }, requestStartedAt: string) {
+  const intendedPeriod = input.rentPeriod || input.paymentDate.slice(0, 7)
   const { data: payments, error: paymentLookupError } = await supabase.from('payments')
     .select('id, month')
     .eq('tenant_id', input.tenantId)
@@ -114,7 +114,7 @@ async function repairFutureRoutedRentPayment(input: { tenantId: string; branchId
     .limit(1)
   if (paymentLookupError) throw databaseError('verify rent payment allocation', paymentLookupError)
   const payment = payments?.[0]
-  if (!payment || payment.month <= intendedPeriod) return
+  if (!payment || payment.month === intendedPeriod) return
 
   const [{ data: tenant, error: tenantError }, { data: obligations, error: obligationError }, { data: auth }] = await Promise.all([
     supabase.from('tenants').select('monthly_rent, due_date').eq('id', input.tenantId).eq('branch_id', input.branchId).single(),
