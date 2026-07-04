@@ -114,42 +114,47 @@ async function repairFutureRoutedRentPayment(input: { tenantId: string; branchId
     .limit(1)
   if (paymentLookupError) throw databaseError('verify rent payment allocation', paymentLookupError)
   const payment = payments?.[0]
-  if (!payment || payment.month === intendedPeriod) return
+  if (!payment) return
 
   const [{ data: tenant, error: tenantError }, { data: obligations, error: obligationError }, { data: auth }] = await Promise.all([
     supabase.from('tenants').select('monthly_rent, due_date').eq('id', input.tenantId).eq('branch_id', input.branchId).single(),
-    supabase.from('payment_obligations').select('*').eq('tenant_id', input.tenantId).eq('payment_type', 'rent').in('period', [intendedPeriod, payment.month]),
+    supabase.from('payment_obligations').select('*').eq('tenant_id', input.tenantId).eq('payment_type', 'rent').gte('period', intendedPeriod).order('period'),
     supabase.auth.getUser(),
   ])
   if (tenantError) throw databaseError('load tenant for rent allocation', tenantError)
   if (obligationError) throw databaseError('load rent obligations', obligationError)
-  const future = obligations?.find((item) => item.period === payment.month)
-  const intended = obligations?.find((item) => item.period === intendedPeriod)
-  const intendedReceived = Number(intended?.received_amount || 0) + input.rentAmount
-  const futureReceived = Math.max(0, Number(future?.received_amount || 0) - input.rentAmount)
   const dueDay = new Date(`${tenant.due_date}T00:00:00`).getDate()
-  const [year, month] = intendedPeriod.split('-').map(Number)
-  const dueDate = `${intendedPeriod}-${String(Math.min(dueDay, new Date(year, month, 0).getDate())).padStart(2, '0')}`
+  const followingPeriod = (period: string) => { const [year, month] = period.split('-').map(Number); const date = new Date(year, month, 1); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}` }
+  const dueDateFor = (period: string) => { const [year, month] = period.split('-').map(Number); return `${period}-${String(Math.min(dueDay, new Date(year, month, 0).getDate())).padStart(2, '0')}` }
+  const obligationByPeriod = new Map((obligations || []).map((item) => [item.period, { ...item }]))
+  const source = obligationByPeriod.get(payment.month)
+  if (source) source.received_amount = Math.max(0, Number(source.received_amount || 0) - input.rentAmount)
 
   const { error: paymentUpdateError } = await supabase.from('payments').update({ month: intendedPeriod }).eq('id', payment.id)
   if (paymentUpdateError) throw databaseError('correct rent payment month', paymentUpdateError)
-  const intendedRow = {
-    id: intended?.id || crypto.randomUUID(), branch_id: input.branchId, tenant_id: input.tenantId,
-    period: intendedPeriod, payment_type: 'rent', agreed_amount: Number(intended?.agreed_amount || tenant.monthly_rent),
-    received_amount: intendedReceived, advance_applied: Number(intended?.advance_applied || 0), due_date: intended?.due_date || dueDate,
-    status: intendedReceived + Number(intended?.advance_applied || 0) >= Number(intended?.agreed_amount || tenant.monthly_rent) ? 'Paid' : 'Partial',
-    created_by: intended?.created_by || auth.user?.id,
-  }
-  const { error: intendedError } = await supabase.from('payment_obligations').upsert(intendedRow)
-  if (intendedError) throw databaseError('correct intended rent obligation', intendedError)
-  if (future) {
-    const futureAgreed = Number(future.agreed_amount || tenant.monthly_rent)
-    const futureAdvance = Number(future.advance_applied || 0)
-    const { error: futureError } = await supabase.from('payment_obligations').update({
-      received_amount: futureReceived,
-      status: futureReceived + futureAdvance >= futureAgreed ? 'Paid' : futureReceived + futureAdvance > 0 ? 'Partial' : 'Pending',
-    }).eq('id', future.id)
-    if (futureError) throw databaseError('restore future rent obligation', futureError)
+  const { error: advanceError } = await supabase.from('tenant_advances').delete().eq('payment_id', payment.id)
+  if (advanceError) throw databaseError('remove allocated rent from advance ledger', advanceError)
+
+  let remaining = input.rentAmount
+  let period = intendedPeriod
+  for (let index = 0; remaining > 0 && index < 120; index += 1, period = followingPeriod(period)) {
+    const existing = obligationByPeriod.get(period)
+    const agreed = Number(existing?.agreed_amount || tenant.monthly_rent)
+    const received = Number(existing?.received_amount || 0)
+    const advanceApplied = Number(existing?.advance_applied || 0)
+    const applied = Math.min(remaining, Math.max(0, agreed - received - advanceApplied))
+    const nextReceived = received + applied
+    const row = {
+      id: existing?.id || crypto.randomUUID(), branch_id: input.branchId, tenant_id: input.tenantId,
+      period, payment_type: 'rent', agreed_amount: agreed, received_amount: nextReceived,
+      advance_applied: advanceApplied, due_date: existing?.due_date || dueDateFor(period),
+      status: nextReceived + advanceApplied >= agreed ? 'Paid' : nextReceived + advanceApplied > 0 ? 'Partial' : 'Pending',
+      created_by: existing?.created_by || auth.user?.id,
+    }
+    const { error: allocationError } = await supabase.from('payment_obligations').upsert(row)
+    if (allocationError) throw databaseError('allocate rent across monthly obligations', allocationError)
+    obligationByPeriod.set(period, row)
+    remaining -= applied
   }
 }
 

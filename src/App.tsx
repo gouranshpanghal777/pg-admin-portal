@@ -301,8 +301,10 @@ function getRentLedgerState(tenant: Tenant, payments: Payment[], obligations: Pa
     const advanceApplied = obligation?.advanceApplied ?? 0
     const pending = Math.max(0, agreed - received - advanceApplied)
     if (pending > 0) {
-      const dueDate = rentDueDateForPeriod(tenant.joiningDate, period)
-      const status: RentLedgerStatus = dueDate < today ? 'Overdue' : dueDate === today ? 'Pending' : daysUntil(dueDate) <= 3 ? 'Upcoming' : 'Clear'
+      const originalDueDate = rentDueDateForPeriod(tenant.joiningDate, period)
+      const hasPartialPayment = received + advanceApplied > 0
+      const dueDate = hasPartialPayment ? rentDueDateForPeriod(tenant.joiningDate, nextPeriod(period)) : originalDueDate
+      const status: RentLedgerStatus = hasPartialPayment ? 'Pending' : originalDueDate < today ? 'Overdue' : originalDueDate === today ? 'Pending' : daysUntil(originalDueDate) <= 3 ? 'Upcoming' : 'Clear'
       return { period, paidThroughMonth: period === joiningMonth ? '-' : periodsBetween(joiningMonth, period).slice(-2, -1)[0] || '-', dueDate, agreed, received, advanceApplied, pending, status }
     }
   }
