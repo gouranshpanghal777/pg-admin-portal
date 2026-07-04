@@ -252,7 +252,14 @@ const today = localDateValue(new Date())
 const currentMonth = today.slice(0, 7)
 const money = (value: number) => `₹${value.toLocaleString('en-IN')}`
 const formatDate = (value?: string) => value ? value.slice(0, 10).split('-').reverse().join('/') : '-'
-const formatMonth = (value?: string) => value && /^\d{4}-\d{2}$/.test(value) ? new Date(`${value}-01T00:00:00`).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }) : 'No entries'
+const formatMonth = (value?: string) => {
+  const match = value?.match(/^(\d{4})-(\d{2})$/)
+  if (!match) return 'No entries'
+  const year = Number(match[1])
+  const month = Number(match[2])
+  if (month < 1 || month > 12) return 'No entries'
+  return new Intl.DateTimeFormat('en-IN', { month: 'long', year: 'numeric' }).format(new Date(year, month - 1, 1))
+}
 const formatDateTime = (value: string) => new Intl.DateTimeFormat('en-GB', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value))
 const uid = (_prefix: string) => crypto.randomUUID()
 const daysUntil = (date: string) =>
