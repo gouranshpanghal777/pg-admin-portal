@@ -1,4 +1,4 @@
-const CACHE = 'pg95-shell-v1'
+const CACHE = 'pg95-shell-v2'
 const SHELL = ['/', '/manifest.webmanifest', '/favicon.svg']
 
 self.addEventListener('install', (event) => {
