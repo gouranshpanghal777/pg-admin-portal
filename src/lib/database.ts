@@ -83,7 +83,7 @@ const databaseError = (operation: string, error: { message?: string; code?: stri
 
 export async function recordSplitPayment(input: { requestId: string; tenantId: string; branchId: string; rentAmount: number; securityAmount: number; electricityAmount: number; otherAmount: number; paymentDate: string; rentPeriod?: string; paymentMode: string; description: string }) {
   const requestStartedAt = new Date(Date.now() - 10_000).toISOString()
-  const { data, error } = await supabase.rpc('record_split_payment_v2', {
+  const payload = {
     p_request_id: input.requestId,
     p_tenant_id: input.tenantId,
     p_branch_id: input.branchId,
@@ -94,7 +94,13 @@ export async function recordSplitPayment(input: { requestId: string; tenantId: s
     p_payment_date: input.paymentDate,
     p_payment_mode: input.paymentMode,
     p_description: input.description || null,
-  })
+  }
+  let response = await supabase.rpc('record_split_payment_v2', payload)
+  if (response.error && !response.error.code && /failed to fetch|networkerror/i.test(response.error.message || '')) {
+    await new Promise((resolve) => window.setTimeout(resolve, 400))
+    response = await supabase.rpc('record_split_payment_v2', payload)
+  }
+  const { data, error } = response
   if (error) throw databaseError('record_split_payment_v2 RPC', error)
   if (input.rentAmount > 0) await repairFutureRoutedRentPayment(input, requestStartedAt)
   return data
