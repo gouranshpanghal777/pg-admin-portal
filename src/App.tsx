@@ -117,6 +117,16 @@ export type Tenant = {
   paidThisMonth: number
   dueDate: string
   notice?: { noticeDate: string; expectedLeavingDate: string; reason: string }
+  rejoins?: Array<{
+    rejoinDate: string
+    dueDate: string
+    roomId: string
+    monthlyRent: number
+    initialRentReceived: number
+    paymentDate?: string
+    paymentMode?: string
+    previousLeft?: Tenant['left']
+  }>
   left?: {
     leftDate: string
     reason: string
@@ -300,7 +310,10 @@ const periodsBetween = (start: string, end: string) => {
 }
 function getRentLedgerState(tenant: Tenant, payments: Payment[], obligations: PaymentObligation[] = []) {
   const rentObligations = obligations.filter((item) => item.tenantId === tenant.id && item.paymentType === 'Rent')
-  const joiningMonth = tenant.joiningDate.slice(0, 7)
+  const currentStay = tenant.rejoins?.at(-1)
+  const cycleStartDate = currentStay?.rejoinDate || tenant.joiningDate
+  const dueAnchor = currentStay?.dueDate || tenant.dueDate || cycleStartDate
+  const joiningMonth = cycleStartDate.slice(0, 7)
   const importedPaidMonths = importedRentPaidMonths[tenant.name.trim().toUpperCase()] || []
   for (const period of periodsBetween(joiningMonth, currentMonth)) {
     const obligation = rentObligations.find((item) => item.period === period)
@@ -310,7 +323,7 @@ function getRentLedgerState(tenant: Tenant, payments: Payment[], obligations: Pa
     const advanceApplied = obligation?.advanceApplied ?? 0
     const pending = Math.max(0, agreed - received - advanceApplied)
     if (pending > 0) {
-      const originalDueDate = rentDueDateForPeriod(tenant.joiningDate, period)
+      const originalDueDate = rentDueDateForPeriod(dueAnchor, period)
       const hasPartialPayment = received + advanceApplied > 0
       const dueDate = originalDueDate
       const status: RentLedgerStatus = hasPartialPayment ? 'Pending' : originalDueDate < today ? 'Overdue' : originalDueDate === today ? 'Pending' : daysUntil(originalDueDate) <= 3 ? 'Upcoming' : 'Clear'
@@ -318,7 +331,7 @@ function getRentLedgerState(tenant: Tenant, payments: Payment[], obligations: Pa
     }
   }
   const period = nextPeriod(currentMonth)
-  const dueDate = rentDueDateForPeriod(tenant.joiningDate, period)
+  const dueDate = rentDueDateForPeriod(dueAnchor, period)
   return { period, paidThroughMonth: currentMonth, dueDate, agreed: tenant.monthlyRent, received: 0, advanceApplied: 0, pending: 0, status: (daysUntil(dueDate) <= 3 ? 'Upcoming' : 'Clear') as RentLedgerStatus }
 }
 
@@ -763,6 +776,21 @@ function App() {
         catch (error) { const message = error instanceof Error ? error.message : 'Tenant admission failed'; setBackendError(message); throw error }
       }} />}
       {modal === 'tenantLedger' && <TenantLedgerModal tenant={data.tenants.find((tenant) => tenant.id === selectedTenantId)!} data={data} onClose={() => setModal('')} />}
+      {modal === 'rejoinTenant' && <RejoinTenantModal tenant={data.tenants.find((tenant) => tenant.id === selectedTenantId)!} rooms={scoped.rooms} activeTenants={scoped.activeTenants} onClose={() => setModal('')} onSubmit={async (payload) => {
+        const tenant = data.tenants.find((item) => item.id === selectedTenantId)!
+        const room = data.rooms.find((item) => item.id === payload.roomId)!
+        const bedNo = data.tenants.filter((item) => item.roomId === payload.roomId && item.status !== 'Left').length + 1
+        const rejoin = { rejoinDate: payload.rejoinDate, dueDate: payload.dueDate, roomId: payload.roomId, monthlyRent: payload.monthlyRent, initialRentReceived: payload.rentReceived, paymentDate: payload.paymentDate, paymentMode: payload.paymentMode, previousLeft: tenant.left }
+        updateData((previous) => ({ ...previous, tenants: previous.tenants.map((item) => item.id === tenant.id ? { ...item, roomId: payload.roomId, bedNo, monthlyRent: payload.monthlyRent, dueDate: payload.dueDate, status: 'Active', left: undefined, notice: undefined, paidThisMonth: 0, rejoins: [...(item.rejoins || []), rejoin] } : item) }), 'Rejoin Tenant', 'Tenants', `${role} ${currentUser.name} rejoined tenant ${tenant.name} in Room ${room.number} on ${formatDate(payload.rejoinDate)} at rent ${money(payload.monthlyRent)}. Payment received at rejoin: ${money(payload.rentReceived)}.`)
+        const saveRejoin = persistenceQueue.current.then(async () => {
+          if (payload.rentReceived > 0) await recordSplitPayment({ requestId: payload.paymentRequestId, tenantId: tenant.id, branchId, rentAmount: payload.rentReceived, securityAmount: 0, electricityAmount: 0, otherAmount: 0, paymentDate: payload.paymentDate, rentPeriod: payload.rejoinDate.slice(0, 7), paymentMode: payload.paymentMode, description: `Rejoin rent payment - ${tenant.name}` })
+          const refreshed = await loadAppData()
+          dataRef.current = refreshed
+          setData(refreshed)
+        })
+        persistenceQueue.current = saveRejoin.catch((error) => setBackendError(error instanceof Error ? error.message : 'Unable to rejoin tenant'))
+        await saveRejoin
+      }} />}
       {modal === 'payment' && <PaymentModal tenants={scoped.activeTenants} payments={scoped.payments} obligations={scoped.obligations} selectedTenantId={selectedTenantId} onClose={() => setModal('')} onSubmit={async (payment) => {
         setBackendError('')
         try {
@@ -890,7 +918,7 @@ function TenantsPage({ data, scoped, tenantTab, setTenantTab, filter, setFilter,
             </tr>
           })}
         </DataTable>
-      </> : <DataTable headers={['Tenant', 'Room', 'Type', 'Joined', 'Left date', 'Reason', 'Security', 'Extra days', 'Extra rent charge', 'Settlement received', 'Balance at exit', 'Contact', 'Actions']}>{scoped.leftTenants.map((tenant) => { const room = data.rooms.find((item) => item.id === tenant.roomId)!; return <tr key={tenant.id} className="border-t border-slate-100"><td className="p-3 font-semibold">{tenant.name}</td><td className="p-3">{room.number}</td><td className="p-3">{room.type}</td><td className="p-3">{tenant.joiningDate}</td><td className="p-3">{tenant.left?.leftDate}</td><td className="p-3">{tenant.left?.reason}</td><td className="p-3">{money(tenant.security)}</td><td className="p-3">{tenant.left?.extraDays || 0}</td><td className="p-3">{money(tenant.left?.extraRentCharge || 0)}</td><td className="p-3 text-emerald-700">{money(tenant.left?.settlementReceived || 0)}</td><td className="p-3">{money(tenant.left?.finalRentBalance || 0)}</td><td className="p-3">{tenant.phone}</td><td className="p-3"><div className="flex gap-2"><Button tone="soft" onClick={() => { setSelectedTenantId(tenant.id); setModal('tenantLedger') }}><Eye size={15} /> Ledger</Button>{isAdmin && <Button tone="soft" onClick={() => { setSelectedTenantId(tenant.id); setModal('confirmUndoVacate') }}>Undo Vacate</Button>}</div></td></tr> })}</DataTable>}
+      </> : <DataTable headers={['Tenant', 'Room', 'Type', 'Joined', 'Left date', 'Reason', 'Security', 'Extra days', 'Extra rent charge', 'Settlement received', 'Balance at exit', 'Contact', 'Actions']}>{scoped.leftTenants.map((tenant) => { const room = data.rooms.find((item) => item.id === tenant.roomId)!; return <tr key={tenant.id} className="border-t border-slate-100"><td className="p-3 font-semibold">{tenant.name}</td><td className="p-3">{room.number}</td><td className="p-3">{room.type}</td><td className="p-3">{tenant.joiningDate}</td><td className="p-3">{tenant.left?.leftDate}</td><td className="p-3">{tenant.left?.reason}</td><td className="p-3">{money(tenant.security)}</td><td className="p-3">{tenant.left?.extraDays || 0}</td><td className="p-3">{money(tenant.left?.extraRentCharge || 0)}</td><td className="p-3 text-emerald-700">{money(tenant.left?.settlementReceived || 0)}</td><td className="p-3">{money(tenant.left?.finalRentBalance || 0)}</td><td className="p-3">{tenant.phone}</td><td className="p-3"><div className="flex gap-2"><Button tone="soft" onClick={() => { setSelectedTenantId(tenant.id); setModal('tenantLedger') }}><Eye size={15} /> Ledger</Button>{canAction('admit_tenant') && <Button tone="green" onClick={() => { setSelectedTenantId(tenant.id); setModal('rejoinTenant') }}><UserPlus size={15} /> Rejoin</Button>}{isAdmin && <Button tone="soft" onClick={() => { setSelectedTenantId(tenant.id); setModal('confirmUndoVacate') }}>Undo Vacate</Button>}</div></td></tr> })}</DataTable>}
     </div>
   )
 }
@@ -996,6 +1024,35 @@ function DataTable({ headers, children }: { headers: string[]; children: ReactNo
   return <Card className="overflow-hidden p-0"><div className="overflow-auto"><table className="w-full min-w-[960px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>{headers.map((header) => <th key={header} className="p-3">{header}</th>)}</tr></thead><tbody>{children}</tbody></table></div></Card>
 }
 
+type RejoinPayload = { paymentRequestId: string; roomId: string; rejoinDate: string; dueDate: string; monthlyRent: number; rentReceived: number; paymentDate: string; paymentMode: string }
+
+function RejoinTenantModal({ tenant, rooms, activeTenants, onClose, onSubmit }: { tenant: Tenant; rooms: Room[]; activeTenants: Tenant[]; onClose: () => void; onSubmit: (payload: RejoinPayload) => Promise<void> }) {
+  const availableRooms = rooms.filter((room) => room.status !== 'Maintenance' && activeTenants.filter((item) => item.roomId === room.id).length < room.beds)
+  const [roomId, setRoomId] = useState(availableRooms[0]?.id || '')
+  const [rejoinDate, setRejoinDate] = useState(today)
+  const [dueDate, setDueDate] = useState(today)
+  const [monthlyRent, setMonthlyRent] = useState(tenant.monthlyRent)
+  const [rentReceived, setRentReceived] = useState(0)
+  const [paymentDate, setPaymentDate] = useState(today)
+  const [paymentMode, setPaymentMode] = useState('Cash')
+  const [paymentRequestId] = useState(() => crypto.randomUUID())
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  return <Modal title={`Rejoin ${tenant.name}`} onClose={onClose}><form className="grid gap-4 md:grid-cols-2" onSubmit={async (event) => { event.preventDefault(); if (saving) return; setSaving(true); setError(''); try { await onSubmit({ paymentRequestId, roomId, rejoinDate, dueDate, monthlyRent, rentReceived, paymentDate, paymentMode }); onClose() } catch (failure) { setError(failure instanceof Error ? failure.message : 'Tenant could not be rejoined.') } finally { setSaving(false) } }}>
+    <div className="md:col-span-2 rounded-md bg-blue-50 p-3 text-sm"><b>{tenant.name}</b><p className="mt-1 text-slate-600">{tenant.phone} · Previous stay: {formatDate(tenant.joiningDate)} to {formatDate(tenant.left?.leftDate)}</p><p className="mt-1 text-slate-600">Existing profile, security and complete ledger will continue.</p></div>
+    <Field label="New room"><select className={inputClass} value={roomId} onChange={(event) => setRoomId(event.target.value)} required>{availableRooms.map((room) => <option key={room.id} value={room.id}>Room {room.number} · {activeTenants.filter((item) => item.roomId === room.id).length}/{room.beds} occupied</option>)}</select></Field>
+    <Field label="Rejoin date"><input className={inputClass} type="date" value={rejoinDate} onChange={(event) => { const next = event.target.value; setRejoinDate(next); setDueDate(next); if (rentReceived === 0) setPaymentDate(next) }} required /></Field>
+    <Field label="Monthly rent"><input className={inputClass} type="number" min="0" step="0.01" value={monthlyRent || ''} onWheel={(event) => event.currentTarget.blur()} onChange={(event) => setMonthlyRent(Number(event.target.value))} required /></Field>
+    <Field label="Rent due date"><input className={inputClass} type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} required /></Field>
+    <Field label="Rent received at rejoin"><input className={inputClass} type="number" min="0" step="0.01" value={rentReceived || ''} placeholder="0" onWheel={(event) => event.currentTarget.blur()} onChange={(event) => setRentReceived(Number(event.target.value))} /></Field>
+    <Field label="Payment date"><input className={inputClass} type="date" value={paymentDate} onChange={(event) => setPaymentDate(event.target.value)} required={rentReceived > 0} disabled={rentReceived <= 0} /></Field>
+    <Field label="Payment mode"><select className={inputClass} value={paymentMode} onChange={(event) => setPaymentMode(event.target.value)} disabled={rentReceived <= 0}><option>Cash</option><option>UPI</option><option>Bank Transfer</option><option>Card</option></select></Field>
+    {!availableRooms.length && <p className="md:col-span-2 rounded-md bg-orange-50 p-3 text-sm text-orange-800">No vacant bed is currently available.</p>}
+    {error && <p className="md:col-span-2 rounded-md bg-rose-50 p-3 text-sm text-rose-700">{error}</p>}
+    <div className="md:col-span-2 flex justify-end gap-2"><Button tone="soft" onClick={onClose}>Cancel</Button><Button tone="green" type="submit" disabled={saving || !roomId}>{saving ? 'Rejoining...' : 'Rejoin Tenant'}</Button></div>
+  </form></Modal>
+}
+
 function TenantLedgerModal({ tenant, data, onClose }: { tenant: Tenant; data: AppData; onClose: () => void }) {
   const ledgerStartPeriod = '2026-03'
   const ledgerStartDate = '2026-03-01'
@@ -1033,7 +1090,7 @@ function TenantLedgerModal({ tenant, data, onClose }: { tenant: Tenant; data: Ap
       <section><h3 className="mb-2 font-bold">Complete Payment History</h3><DataTable headers={['Payment date', 'For month', 'Payment head', 'Amount', 'Mode', 'Description', 'Cashbook']}>{payments.map((payment) => { const cashbook = data.cashbook.find((entry) => entry.linkedId === payment.id); return <tr key={payment.id} className="border-t border-slate-100"><td className="p-3">{formatDate(payment.date)}</td><td className="p-3">{payment.month === 'one-time' ? '-' : formatMonth(payment.month)}</td><td className="p-3">{payment.paymentType}</td><td className="p-3 font-semibold text-emerald-700">{money(payment.amount)}</td><td className="p-3">{payment.paymentMode}</td><td className="p-3">{payment.description || '-'}</td><td className="p-3">{cashbook ? cashbook.description : '-'}</td></tr>})}{!payments.length && <tr><td className="p-3 text-slate-500" colSpan={7}>No payments recorded.</td></tr>}</DataTable></section>
       {security.length > 0 && <section><h3 className="mb-2 font-bold">Security History</h3><DataTable headers={['Date', 'Movement', 'Amount', 'Reason']}>{security.map((item) => <tr key={item.id} className="border-t border-slate-100"><td className="p-3">{formatDate(item.date)}</td><td className="p-3 capitalize">{item.type}</td><td className="p-3">{money(item.amount)}</td><td className="p-3">{item.reason || '-'}</td></tr>)}</DataTable></section>}
       {advances.length > 0 && <section><h3 className="mb-2 font-bold">Advance History</h3><DataTable headers={['Date', 'Movement', 'Amount', 'Rent month', 'Description']}>{advances.map((item) => <tr key={item.id} className="border-t border-slate-100"><td className="p-3">{formatDate(item.date)}</td><td className="p-3 capitalize">{item.type === 'credit' ? 'Advance received' : item.type === 'used' ? 'Advance adjusted' : 'Advance refunded'}</td><td className="p-3">{money(item.amount)}</td><td className="p-3">{item.period ? formatMonth(item.period) : '-'}</td><td className="p-3">{item.description || '-'}</td></tr>)}</DataTable></section>}
-      <section><h3 className="mb-2 font-bold">Tenant Activity Timeline</h3><div className="grid gap-2"><div className="rounded-md border-l-4 border-blue-500 bg-slate-50 p-3 text-sm"><b>{tenant.joiningDate >= ledgerStartDate ? `${formatDate(tenant.joiningDate)} · Admission` : '01/03/2026 · Opening record'}</b><p className="mt-1 text-slate-600">{tenant.joiningDate >= ledgerStartDate ? `Admitted to Room ${room?.number || '-'}.` : 'Tenant active when the supplied register begins.'} Rent {money(admissionRent)}.</p></div>{activity.map((item) => <div key={item.id} className="rounded-md border-l-4 border-slate-300 bg-slate-50 p-3 text-sm"><div className="flex flex-wrap justify-between gap-2"><b>{item.actionType}</b><span>{formatDateTime(item.at)}</span></div><p className="mt-1 text-slate-600">{item.description}</p></div>)}{tenant.left && <div className="rounded-md border-l-4 border-rose-500 bg-rose-50 p-3 text-sm"><b>{formatDate(tenant.left.leftDate)} · Vacated</b><p className="mt-1">{tenant.left.reason}. Exit balance {money(tenant.left.finalRentBalance)}.</p></div>}</div></section>
+      <section><h3 className="mb-2 font-bold">Tenant Activity Timeline</h3><div className="grid gap-2"><div className="rounded-md border-l-4 border-blue-500 bg-slate-50 p-3 text-sm"><b>{tenant.joiningDate >= ledgerStartDate ? `${formatDate(tenant.joiningDate)} · Admission` : '01/03/2026 · Opening record'}</b><p className="mt-1 text-slate-600">{tenant.joiningDate >= ledgerStartDate ? `Admitted to Room ${room?.number || '-'}.` : 'Tenant active when the supplied register begins.'} Rent {money(admissionRent)}.</p></div>{(tenant.rejoins || []).map((item, index) => <div key={`${item.rejoinDate}-${index}`} className="rounded-md border-l-4 border-emerald-500 bg-emerald-50 p-3 text-sm"><b>{formatDate(item.rejoinDate)} · Rejoined</b><p className="mt-1">Room {data.rooms.find((room) => room.id === item.roomId)?.number || '-'} · Rent {money(item.monthlyRent)} · Paid at rejoin {money(item.initialRentReceived)}</p></div>)}{activity.map((item) => <div key={item.id} className="rounded-md border-l-4 border-slate-300 bg-slate-50 p-3 text-sm"><div className="flex flex-wrap justify-between gap-2"><b>{item.actionType}</b><span>{formatDateTime(item.at)}</span></div><p className="mt-1 text-slate-600">{item.description}</p></div>)}{tenant.left && <div className="rounded-md border-l-4 border-rose-500 bg-rose-50 p-3 text-sm"><b>{formatDate(tenant.left.leftDate)} · Vacated</b><p className="mt-1">{tenant.left.reason}. Exit balance {money(tenant.left.finalRentBalance)}.</p></div>}</div></section>
       <div className="flex justify-end"><Button tone="soft" onClick={onClose}>Close Ledger</Button></div>
     </div>
   </Modal>
