@@ -3,4 +3,4 @@
 update public.profiles p
 set role = 'admin', active = true
 from auth.users u
-where p.id = u.id and u.email = 'OWNER_EMAIL_HERE';
+where p.id = u.id and u.email = 'gouranshpanghal777@gmail.com';

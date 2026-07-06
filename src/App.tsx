@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase, supabaseConfigured } from './lib/supabase'
@@ -53,6 +53,8 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import jsPDF from 'jspdf'
+import autoTable from 'jspdf-autotable/es'
 
 export type Role = 'Admin' | 'Staff'
 type Page =
@@ -465,10 +467,10 @@ function Badge({ children, tone = 'slate' }: { children: ReactNode; tone?: 'gree
   return <span className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${tones[tone]}`}>{children}</span>
 }
 
-function Modal({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
+function Modal({ title, children, onClose, wide }: { title: string; children: ReactNode; onClose: () => void; wide?: boolean }) {
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/35 p-4 backdrop-blur-sm">
-      <div className="max-h-[92vh] w-full max-w-2xl overflow-auto rounded-lg bg-white p-5 shadow-2xl">
+      <div className={`max-h-[92vh] w-full ${wide ? 'max-w-6xl' : 'max-w-2xl'} overflow-auto rounded-lg bg-white p-5 shadow-2xl`}>
         <div className="mb-4 flex items-center justify-between gap-4">
           <h2 className="text-xl font-bold text-slate-900">{title}</h2>
           <button aria-label="Close modal" onClick={onClose} className="rounded-md p-2 text-slate-500 hover:bg-slate-100"><X size={20} /></button>
@@ -832,6 +834,7 @@ function App() {
         try { await deleteCashbookEntryCascade(selectedCashbookId); setData(await loadAppData()) }
         catch (error) { const message = error instanceof Error ? error.message : 'Cashbook deletion failed'; setBackendError(message); throw error }
       }} />}
+      {modal === 'fiveMonthRegister' && <FiveMonthRegisterModal data={data} scoped={scoped} branch={branch} visibleBranches={visibleBranches} onClose={() => setModal('')} />}
       {modal === 'notifications' && <Modal title="Notifications" onClose={() => setModal('')}>{notifications.length ? <div className="grid gap-2">{notifications.map((note) => <div key={note} className="rounded-md bg-orange-50 p-3 text-sm font-semibold text-orange-800">{note}</div>)}</div> : <p>No active alerts.</p>}</Modal>}
     </div>
   )
@@ -899,6 +902,7 @@ function TenantsPage({ data, scoped, tenantTab, setTenantTab, filter, setFilter,
   return (
     <div className="grid gap-4">
       <Tabs values={['Active', 'Left PG']} value={tenantTab} onChange={(value) => setTenantTab(value as 'Active' | 'Left PG')} />
+      <div className="flex items-center justify-end"><Button tone="soft" onClick={() => setModal('fiveMonthRegister')}><FileBarChart size={16} /> 5 Month Register</Button></div>
       {tenantTab === 'Active' ? <>
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Metric icon={<ShieldCheck />} label="Total Security Held" value={money(totalSecurityHeld)} /></div>
         <Tabs values={['All', 'Paid', 'Pending', 'Overdue', 'Vacating Notice']} value={filter} onChange={setFilter} />
@@ -1314,6 +1318,282 @@ function TicketModal({ rooms, tenants, onClose, onSubmit }: { rooms: Room[]; ten
 
 function RoomDetailsModal({ room, tenants, tickets, onClose, onAdmit, onMaintenance }: { room: Room; tenants: Tenant[]; tickets: MaintenanceTicket[]; onClose: () => void; onAdmit: () => void; onMaintenance: () => void }) {
   return <Modal title={`Room ${room.number} Details`} onClose={onClose}><div className="grid gap-4"><div className="grid gap-3 md:grid-cols-3">{[['Floor', room.floor], ['Room type', room.type], ['Total beds', room.beds], ['Occupied beds', tenants.length], ['Vacant beds', room.beds - tenants.length], ['Rent', money(room.rent)], ['Electricity type', room.electricity], ['Maintenance status', room.status], ['Payment status', tenants.map(getPaymentStatus).join(', ') || 'No tenants']].map(([label, value]) => <div key={String(label)} className="rounded-md bg-slate-50 p-3"><p className="text-xs text-slate-500">{label}</p><p className="font-bold">{value}</p></div>)}</div><Card><h3 className="font-bold">Current tenants</h3>{tenants.map((tenant) => <p key={tenant.id} className="mt-2 text-sm">{tenant.name} · Bed {tenant.bedNo}</p>)}</Card><Card><h3 className="font-bold">Maintenance history</h3>{tickets.map((ticket) => <p key={ticket.id} className="mt-2 text-sm">{ticket.title} · {ticket.status}</p>)}</Card><div className="flex justify-end gap-2"><Button tone="blue" onClick={onAdmit}>Admit tenant to vacant bed</Button><Button tone="red" onClick={onMaintenance}>Mark room maintenance</Button></div></div></Modal>
+}
+
+function FiveMonthRegisterModal({ data, scoped, branch, visibleBranches, onClose }: { data: AppData; scoped: ReturnType<typeof branchData>; branch: Branch; visibleBranches: Branch[]; onClose: () => void }) {
+  const months = ['2026-01','2026-02','2026-03','2026-04','2026-05','2026-06','2026-07','2026-08','2026-09','2026-10','2026-11','2026-12']
+  const availableReportMonths = months.filter((m) => m <= currentMonth)
+  const defaultMonth = availableReportMonths.includes(currentMonth) ? currentMonth : availableReportMonths.at(-1) || currentMonth
+  const [reportEndMonth, setReportEndMonth] = useState(defaultMonth)
+  const [statusFilter, setStatusFilter] = useState<'All' | 'Active' | 'Vacated'>('All')
+  const [roomFilter, setRoomFilter] = useState('All')
+  const [branchFilterId, setBranchFilterId] = useState(branch.id)
+  const [pdfStatus, setPdfStatus] = useState<string | null>(null)
+
+  const registerMonths = useMemo(() => {
+    const [year, month] = reportEndMonth.split('-').map(Number)
+    const result: string[] = []
+    for (let i = 4; i >= 0; i--) {
+      const date = new Date(year, month - 1 - i, 1)
+      result.push(`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`)
+    }
+    return result
+  }, [reportEndMonth])
+
+  const filterBranchTenants = useMemo(() => {
+    return data.tenants.filter((t) => t.branchId === branchFilterId)
+  }, [data.tenants, branchFilterId])
+
+  const filterBranchRooms = useMemo(() => {
+    return data.rooms.filter((r) => r.branchId === branchFilterId)
+  }, [data.rooms, branchFilterId])
+
+  const firstMonth = registerMonths[0]
+  const lastMonth = registerMonths[4]
+
+  const relevantTenants = useMemo(() => {
+    return filterBranchTenants.filter((tenant) => {
+      const joinMonth = tenant.joiningDate.slice(0, 7)
+      if (joinMonth > lastMonth) return false
+      if (tenant.left && tenant.left.leftDate.slice(0, 7) < firstMonth) return false
+      if (statusFilter === 'Active' && tenant.status === 'Left') return false
+      if (statusFilter === 'Vacated' && tenant.status !== 'Left') return false
+      if (roomFilter !== 'All' && tenant.roomId !== roomFilter) return false
+      return true
+    })
+  }, [filterBranchTenants, firstMonth, lastMonth, statusFilter, roomFilter])
+
+  const getRoomNumber = (tenant: Tenant) => {
+    const room = filterBranchRooms.find((r) => r.id === tenant.roomId)
+    return room?.number || ''
+  }
+
+  const sortedTenants = useMemo(() => {
+    return [...relevantTenants].sort((a, b) => {
+      const numA = getRoomNumber(a)
+      const numB = getRoomNumber(b)
+      const aMatch = numA.match(/^(\d+)/)
+      const bMatch = numB.match(/^(\d+)/)
+      if (aMatch && bMatch) {
+        const numDiff = Number(aMatch[1]) - Number(bMatch[1])
+        if (numDiff !== 0) return numDiff
+      }
+      return numA.localeCompare(numB)
+    })
+  }, [relevantTenants])
+
+  const getMonthStatus = (tenant: Tenant, month: string): string => {
+    const joinMonth = tenant.joiningDate.slice(0, 7)
+    if (month < joinMonth) return '—'
+    if (tenant.left && tenant.left.leftDate.slice(0, 7) < month) return '—'
+
+    const importedPaid = importedRentPaidMonths[tenant.name.trim().toUpperCase()]
+    if (importedPaid?.includes(month)) return 'X'
+
+    const obligation = data.obligations.find(
+      (o) => o.tenantId === tenant.id && o.period === month && o.paymentType === 'Rent'
+    )
+    if (obligation) {
+      const totalReceived = obligation.received + obligation.advanceApplied
+      if (totalReceived >= obligation.agreed) return 'X'
+      if (totalReceived > 0) return `₹${obligation.received.toLocaleString('en-IN')} / ₹${obligation.agreed.toLocaleString('en-IN')}`
+    }
+
+    const paymentsForMonth = data.payments.filter(
+      (p) => p.tenantId === tenant.id && p.paymentType === 'Rent' && p.month === month
+    )
+    const totalPayments = paymentsForMonth.reduce((sum, p) => sum + p.amount, 0)
+    if (totalPayments >= tenant.monthlyRent) return 'X'
+    if (totalPayments > 0) return `₹${totalPayments.toLocaleString('en-IN')} / ₹${tenant.monthlyRent.toLocaleString('en-IN')}`
+
+    return 'Pending'
+  }
+
+  const getBalanceDisplay = (tenant: Tenant): string => {
+    const rentState = scoped.rentStates.get(tenant.id)
+    if (rentState && rentState.pending > 0) {
+      return `${money(rentState.pending)} Pending`
+    }
+    const advanceBalance = data.advances
+      .filter((a) => a.tenantId === tenant.id)
+      .reduce((sum, a) => sum + (a.type === 'credit' ? a.amount : -a.amount), 0)
+    if (advanceBalance > 0) {
+      return `${money(advanceBalance)} Advance`
+    }
+    return '₹0'
+  }
+
+  const getSecurityDisplay = (tenant: Tenant): string => {
+    if (tenant.security === 0) return '₹0 / Not Agreed'
+    const refunded = data.securityLedger
+      .filter((s) => s.tenantId === tenant.id && s.type === 'refunded')
+      .reduce((sum, s) => sum + s.amount, 0)
+    if (refunded > 0) return `Refunded ${money(refunded)}`
+    if (tenant.securityReceived >= tenant.security) return `${money(tenant.security)} Paid`
+    if (tenant.securityReceived > 0) return `${money(tenant.securityReceived)} / ${money(tenant.security)}`
+    return `${money(tenant.security)} Pending`
+  }
+
+  const roomOptions = useMemo(() => {
+    const options = filterBranchRooms.map((r) => ({ id: r.id, label: `Room ${r.number}` }))
+    options.unshift({ id: 'All', label: 'All Rooms' })
+    return options
+  }, [filterBranchRooms])
+
+  const generatePdf = useCallback(() => {
+    setPdfStatus('Generating PDF...')
+    const shortMonth = (m: string) => new Date(Number(m.slice(0,4)), Number(m.slice(5,7)) - 1, 1).toLocaleString('en-US', { month: 'short', year: 'numeric' }).replace(/\s+/g, '-')
+    const filename = `PG95-${branch.name}-5-Month-Register-${shortMonth(firstMonth)}-to-${shortMonth(lastMonth)}.pdf`
+    let doc: any
+    try {
+      doc = new jsPDF('landscape', 'mm', 'a4')
+      const pageWidth = doc.internal.pageSize.getWidth()
+      const margin = 8
+
+      const head = ['#', 'Room', 'Tenant', ...registerMonths.map(formatMonth), 'Monthly Rent', 'Balance', 'Mobile', 'Rent Due', 'Electricity', 'Security']
+      const colWidths = [8, 10, 26, ...registerMonths.map(() => 18), 16, 18, 18, 14, 12, 16]
+      const body = sortedTenants.map((tenant, index) => {
+        const room = filterBranchRooms.find((r) => r.id === tenant.roomId)
+        const rentState = scoped.rentStates.get(tenant.id)
+        return [
+          String(index + 1),
+          room?.number || '',
+          tenant.name,
+          ...registerMonths.map((m) => getMonthStatus(tenant, m)),
+          money(tenant.monthlyRent),
+          getBalanceDisplay(tenant),
+          tenant.phone,
+          formatDate(rentState?.dueDate || tenant.dueDate),
+          tenant.electricity === 'Fixed' ? money(tenant.electricityAmount) : 'Included',
+          getSecurityDisplay(tenant),
+        ].map((cell) => cell.replace(/₹/g, 'Rs.'))
+      })
+
+      doc.setFontSize(10)
+      doc.text(`5 Month Tenant Register - ${branch.name}`, margin, 12)
+      doc.setFontSize(8)
+      doc.text(`Period: ${formatMonth(firstMonth)} - ${formatMonth(lastMonth)}`, margin, 17)
+      doc.text(`Generated: ${formatDate(today)}`, margin, 21)
+      if (statusFilter !== 'All') doc.text(`Filter: ${statusFilter}`, pageWidth - margin, 17, { align: 'right' })
+
+      autoTable(doc, {
+        head: [head],
+        body,
+        startY: 24,
+        margin: { left: margin, right: margin },
+        columnStyles: head.reduce<Record<string, { cellWidth: number }>>((acc, _, i) => {
+          acc[i] = { cellWidth: colWidths[i] }
+          return acc
+        }, {}),
+        styles: { fontSize: 6.5, cellPadding: 1.2, valign: 'middle', overflow: 'linebreak' },
+        headStyles: { fontSize: 6, fillColor: [37, 99, 235], textColor: 255, fontStyle: 'bold', halign: 'center' },
+        bodyStyles: { fontSize: 6.5 },
+        alternateRowStyles: { fillColor: [248, 250, 252] },
+        pageBreak: 'auto',
+        showHead: 'everyPage',
+        didDrawPage: (data: any) => {
+          doc.setFontSize(7)
+          doc.text(`Page ${data.pageNumber}`, pageWidth - margin, doc.internal.pageSize.getHeight() - 4, { align: 'right' })
+        },
+      })
+
+      const blob = doc.output('blob')
+      if (!blob || blob.size === 0) throw new Error('PDF blob is empty')
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      a.rel = 'noopener'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+      setPdfStatus('PDF downloaded successfully')
+      setTimeout(() => setPdfStatus(null), 3000)
+    } catch (e: any) {
+      console.error('PDF generation failed:', e)
+      setPdfStatus(`PDF failed: ${e.message || 'unknown error'}`)
+    }
+  }, [sortedTenants, registerMonths, branch, reportEndMonth, firstMonth, lastMonth, statusFilter])
+
+  return (
+    <Modal title="5 Month Tenant Register" wide onClose={onClose}>
+      <div className="grid gap-4">
+        <div className="no-print flex flex-wrap items-center gap-3">
+          <Field label="Report ending month">
+            <select className={inputClass} value={reportEndMonth} onChange={(e) => setReportEndMonth(e.target.value)}>
+              {availableReportMonths.map((m) => <option key={m} value={m}>{formatMonth(m)}</option>)}
+            </select>
+          </Field>
+          <Field label="Branch">
+            <select className={inputClass} value={branchFilterId} onChange={(e) => setBranchFilterId(e.target.value)}>
+              {visibleBranches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+          </Field>
+          <Field label="Room">
+            <select className={inputClass} value={roomFilter} onChange={(e) => setRoomFilter(e.target.value)}>
+              {roomOptions.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+            </select>
+          </Field>
+          <div className="flex gap-2 items-end">
+            <Tabs values={['All', 'Active', 'Vacated']} value={statusFilter} onChange={(v) => setStatusFilter(v as typeof statusFilter)} />
+          </div>
+          <div className="flex-1" />
+          <Button tone="blue" onClick={generatePdf}><Download size={16} /> Download PDF</Button>
+          {pdfStatus && <span className={`text-xs font-semibold ${pdfStatus.includes('failed') ? 'text-rose-600' : pdfStatus.includes('success') ? 'text-emerald-600' : 'text-blue-600'}`}>{pdfStatus}</span>}
+        </div>
+
+        <Card className="overflow-hidden p-0">
+          <div className="overflow-auto max-h-[65vh]">
+            <table className="w-full text-left text-xs">
+              <thead className="sticky top-0 z-10 bg-blue-600 text-white">
+                <tr>
+                  <th className="p-2 w-8">#</th>
+                  <th className="p-2 w-14">Room</th>
+                  <th className="p-2 w-32">Tenant</th>
+                  {registerMonths.map((m) => <th key={m} className="p-2 text-center w-24">{formatMonth(m)}</th>)}
+                  <th className="p-2 w-20">Monthly Rent</th>
+                  <th className="p-2 w-20">Balance</th>
+                  <th className="p-2 w-22">Mobile</th>
+                  <th className="p-2 w-18">Rent Due Date</th>
+                  <th className="p-2 w-16">Electricity</th>
+                  <th className="p-2 w-20">Security</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedTenants.map((tenant, index) => {
+                  const room = filterBranchRooms.find((r) => r.id === tenant.roomId)
+                  const rentState = scoped.rentStates.get(tenant.id)
+                  return <tr key={tenant.id} className={`border-t border-slate-100 ${index % 2 === 0 ? 'bg-white' : 'bg-slate-50'}`}>
+                    <td className="p-2 text-slate-500">{index + 1}</td>
+                    <td className="p-2 font-semibold">{room?.number || ''}</td>
+                    <td className="p-2">{tenant.name}</td>
+                    {registerMonths.map((m) => {
+                      const status = getMonthStatus(tenant, m)
+                      const isPaid = status === 'X'
+                      const isPending = status === 'Pending'
+                      const isNa = status === '—'
+                      const isPartial = !isPaid && !isPending && !isNa
+                      return <td key={m} className={`p-2 text-center font-semibold ${isPaid ? 'text-emerald-700' : isPending ? 'text-rose-700' : isPartial ? 'text-orange-700' : 'text-slate-400'}`}>
+                        {isNa ? '—' : isPaid ? 'X' : status}
+                      </td>
+                    })}
+                    <td className="p-2 text-right font-semibold">{money(tenant.monthlyRent)}</td>
+                    <td className={`p-2 text-right font-semibold ${getBalanceDisplay(tenant).includes('Pending') ? 'text-rose-700' : getBalanceDisplay(tenant).includes('Advance') ? 'text-emerald-700' : ''}`}>{getBalanceDisplay(tenant)}</td>
+                    <td className="p-2">{tenant.phone}</td>
+                    <td className="p-2">{formatDate(rentState?.dueDate || tenant.dueDate)}</td>
+                    <td className="p-2">{tenant.electricity === 'Fixed' ? money(tenant.electricityAmount) : 'Included'}</td>
+                    <td className="p-2">{getSecurityDisplay(tenant)}</td>
+                  </tr>
+                })}
+                {!sortedTenants.length && <tr><td colSpan={14} className="p-4 text-center text-slate-500">No tenants found for the selected period.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      </div>
+    </Modal>
+  )
 }
 
 function downloadText(filename: string, text: string) {
