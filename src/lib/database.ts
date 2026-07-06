@@ -312,9 +312,21 @@ export async function createStaffAccount(payload: { id?: string; name: string; p
   return data
 }
 
-export async function deleteBranchCascade(branchId: string) {
-  const { error } = await supabase.rpc('delete_branch_cascade', { p_branch_id: branchId })
+export async function deleteBranchCascade(branchId: string, userId?: string, userName?: string, userRole?: string, branchName?: string) {
+  const { error } = await supabase.rpc('delete_branch_cascade', {
+    p_branch_id: branchId,
+    p_user_id: userId || null,
+    p_user_name: userName || null,
+    p_user_role: userRole || null,
+    p_branch_name: branchName || null,
+  })
   if (error) throw databaseError('delete_branch_cascade RPC', error)
+}
+
+export async function cleanupOldActivityLogs() {
+  const { data, error } = await supabase.rpc('cleanup_old_activity_logs')
+  if (error) throw databaseError('cleanup_old_activity_logs RPC', error)
+  return data as number
 }
 
 export async function deactivateStaffAccount(id: string) {
