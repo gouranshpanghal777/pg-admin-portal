@@ -312,6 +312,11 @@ export async function createStaffAccount(payload: { id?: string; name: string; p
   return data
 }
 
+export async function deleteBranchCascade(branchId: string) {
+  const { error } = await supabase.rpc('delete_branch_cascade', { p_branch_id: branchId })
+  if (error) throw databaseError('delete_branch_cascade RPC', error)
+}
+
 export async function deactivateStaffAccount(id: string) {
   const { data, error } = await supabase.functions.invoke('create-staff', { body: { id, deactivate: true } })
   if (error) throw error
