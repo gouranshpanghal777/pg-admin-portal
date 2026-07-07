@@ -25,11 +25,17 @@ export async function loadAppData(): Promise<AppData> {
     purchases: purchases.map((r) => ({ id: r.id, branchId: r.branch_id, itemId: r.item_id, quantity: num(r.quantity), unitCost: num(r.unit_cost), date: r.purchase_date, note: r.note || '', expenseId: r.expense_id || undefined, cashbookId: r.cashbook_entry_id || undefined })),
     tickets: tickets.map((r) => ({ id: r.id, branchId: r.branch_id, title: r.title, status: r.status, roomId: r.room_id, tenantId: r.tenant_id || undefined, category: r.category, priority: r.priority, raisedDate: r.raised_date, assignedTo: r.assigned_to || '', description: r.description || '', resolution: r.resolution || undefined })),
     invoices: invoices.map((r) => ({ id: r.id, branchId: r.branch_id, tenantId: r.tenant_id, number: r.number, period: r.period, createdAt: r.created_at.slice(0, 10) })),
-    activityLogs: logs.map((r) => ({ id: r.id, branchId: r.branch_id || '', branchName: r.branch_name, userId: r.user_id, userName: r.user_name, role: r.user_role === 'admin' ? 'Admin' : 'Staff', action: r.action_type, entity: r.module, module: r.module, actionType: r.action_type, description: r.description, metadata: r.metadata, at: r.created_at, oldValue: '', newValue: '' })),
+    activityLogs: logs.map((r) => ({ id: r.id, branchId: r.branch_id || '', branchName: r.branch_name, userId: r.user_id, userName: r.user_name, role: r.user_role === 'admin' ? 'Admin' : 'Staff', action: r.action_type, entity: r.module, module: r.module, actionType: r.action_type, description: r.description, metadata: r.metadata, at: r.created_at, oldValue: '', newValue: '' })).sort((a, b) => b.at.localeCompare(a.at) || b.id.localeCompare(a.id)),
     obligations: obligations.map((r) => ({ id: r.id, branchId: r.branch_id, tenantId: r.tenant_id, period: r.period, paymentType: normalizePaymentType(r.payment_type), agreed: num(r.agreed_amount), received: num(r.received_amount), advanceApplied: num(r.advance_applied), dueDate: r.due_date, status: r.status })),
     securityLedger: securityLedger.map((r) => ({ id: r.id, branchId: r.branch_id, tenantId: r.tenant_id, type: r.movement_type, amount: num(r.amount), date: r.movement_date, reason: r.reason })),
     advances: advances.map((r) => ({ id: r.id, branchId: r.branch_id, tenantId: r.tenant_id, type: r.movement_type, amount: num(r.amount), date: r.movement_date, period: r.period, description: r.description })),
   } as AppData
+}
+
+export async function loadActivityLogs(): Promise<AppData['activityLogs']> {
+  const { data, error } = await supabase.from('activity_logs').select('*').order('created_at', { ascending: false })
+  if (error) throw databaseError('select activity_logs', error)
+  return (data || []).map((r) => ({ id: r.id, branchId: r.branch_id || '', branchName: r.branch_name, userId: r.user_id, userName: r.user_name, role: r.user_role === 'admin' ? 'Admin' : 'Staff', action: r.action_type, entity: r.module, module: r.module, actionType: r.action_type, description: r.description, metadata: r.metadata, at: r.created_at, oldValue: '', newValue: '' }))
 }
 
 const rows = {
@@ -53,8 +59,8 @@ export async function persistAppData(before: AppData, after: AppData, userId: st
   for (const key of order) {
     const oldItems = (before as any)[key] || []
     const newItems = (after as any)[key] || []
-    const oldMap = new Map(oldItems.map((item: any) => [item.id, JSON.stringify(item)]))
-    const changed = newItems.filter((item: any) => oldMap.get(item.id) !== JSON.stringify(item))
+    const oldMap = new Map(oldItems.map((item: any) => [item.id, JSON.stringify(rows[key](item, userId))]))
+    const changed = newItems.filter((item: any) => oldMap.get(item.id) !== JSON.stringify(rows[key](item, userId)))
     const table = tableNames[key] || key
     if (changed.length) { const { error } = await supabase.from(table).upsert(changed.map((item: any) => rows[key](item, userId))); if (error) throw databaseError(`upsert ${table}`, error) }
   }

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase, supabaseConfigured } from './lib/supabase'
-import { admitTenant, cleanupOldActivityLogs, createStaffAccount, deactivateStaffAccount, deleteBranchCascade, deleteCashbookEntryCascade, deleteTenantWithPayments, loadAppData, persistAppData, recordSplitPayment, undoVacateTenant, updateUnsettledTenantRent, vacateTenantErp } from './lib/database'
+import { admitTenant, cleanupOldActivityLogs, createStaffAccount, deactivateStaffAccount, deleteBranchCascade, deleteCashbookEntryCascade, deleteTenantWithPayments, loadAppData, loadActivityLogs, persistAppData, recordSplitPayment, undoVacateTenant, updateUnsettledTenantRent, vacateTenantErp } from './lib/database'
 import { importedRentPaidMonths } from './data/farukhnagarRentRegister'
 import {
   AlertTriangle,
@@ -284,7 +284,11 @@ const formatMonth = (value?: string) => {
   if (month < 1 || month > 12) return 'No entries'
   return new Intl.DateTimeFormat('en-IN', { month: 'long', year: 'numeric' }).format(new Date(year, month - 1, 1))
 }
-const formatDateTime = (value: string) => new Intl.DateTimeFormat('en-GB', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(value))
+const formatDateTime = (value: string) => {
+  if (!value) return '...'
+  const d = new Date(value)
+  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' }) + ', ' + d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' })
+}
 const uid = (_prefix: string) => crypto.randomUUID()
 const daysUntil = (date: string) =>
   Math.ceil((new Date(`${date}T00:00:00`).getTime() - new Date(`${today}T00:00:00`).getTime()) / 86400000)
@@ -348,7 +352,7 @@ function logActivity(data: AppData, input: { userName: string; userId: string; u
   const log: ActivityLog = {
     id: uid('log'), branchId: input.branchId, branchName: input.branchName, userId: input.userId, role: input.userRole,
     action: input.actionType, entity: input.module, module: input.module, actionType: input.actionType, userName: input.userName,
-    description: input.description, metadata: input.metadata, at: new Date().toISOString(), oldValue: '', newValue: '',
+    description: input.description, metadata: input.metadata, at: '', oldValue: '', newValue: '',
   }
   return { ...data, activityLogs: [log, ...data.activityLogs] }
 }
@@ -377,7 +381,7 @@ function branchData(data: AppData, branchId: string) {
   const securityLedger = data.securityLedger.filter((item) => item.branchId === branchId)
   const advances = data.advances.filter((item) => item.branchId === branchId)
   const cashbook = data.cashbook.filter((entry) => entry.branchId === branchId).sort((a, b) => a.date.localeCompare(b.date))
-  const expenses = data.expenses.filter((expense) => expense.branchId === branchId)
+  const expenses = data.expenses.filter((expense) => expense.branchId === branchId).sort((a, b) => b.date.localeCompare(a.date))
   const inventory = data.inventory.filter((item) => item.branchId === branchId)
   const purchases = data.purchases.filter((purchase) => purchase.branchId === branchId)
   const tickets = data.tickets.filter((ticket) => ticket.branchId === branchId)
@@ -396,7 +400,11 @@ function branchData(data: AppData, branchId: string) {
   const expected = activeTenants.reduce((sum, tenant) => sum + getTenantDue(tenant), 0)
   const rentStates = new Map(activeTenants.map((tenant) => [tenant.id, getRentLedgerState(tenant, payments, obligations)]))
   const overdue = activeTenants.reduce((sum, tenant) => rentStates.get(tenant.id)?.status === 'Overdue' ? sum + (rentStates.get(tenant.id)?.pending || 0) : sum, 0)
-  const pending = activeTenants.reduce((sum, tenant) => sum + (rentStates.get(tenant.id)?.pending || 0), 0)
+  const pending = activeTenants.reduce((sum, tenant) => {
+    const state = rentStates.get(tenant.id)
+    if (!state || (state.status !== 'Pending' && state.status !== 'Overdue')) return sum
+    return sum + state.pending
+  }, 0)
   const openTickets = tickets.filter((ticket) => ticket.status !== 'Resolved')
   const obligationPending = (type: PaymentObligation['paymentType']) => obligations.filter((item) => item.paymentType === type && item.period === (type === 'Security Deposit' ? 'one-time' : currentMonth)).reduce((sum, item) => sum + Math.max(0, item.agreed - item.received - item.advanceApplied), 0)
   const advanceBalance = advances.reduce((sum, item) => sum + (item.type === 'credit' ? item.amount : -item.amount), 0)
@@ -550,7 +558,7 @@ function App() {
   useEffect(() => {
     if (!session) { setData(emptyAppData()); return }
     setDataLoading(true); setBackendError('')
-    loadAppData().then(async (next) => { const profile = next.users.find((user) => user.id === session.user.id); if (profile) setRole(profile.role); const loginBranch = next.branches.find((item) => profile?.role === 'Admin' || profile?.branchIds.includes(item.id)); const loginKey = `pg95-login:${session.user.id}`; const shouldLogLogin = sessionStorage.getItem(loginKey) !== '1'; const logged = profile && loginBranch && shouldLogLogin ? logActivity(next, { userName: profile.name, userId: profile.id, userRole: profile.role, branchId: loginBranch.id, branchName: loginBranch.name, module: 'Authentication', actionType: 'Login', description: `${profile.role} ${profile.name} logged in.` }) : next; dataRef.current = logged; setData(logged); if (logged !== next) { await persistAppData(next, logged, session.user.id); sessionStorage.setItem(loginKey, '1') }; const cleanupKey = 'pg95-last-cleanup'; const lastCleanup = localStorage.getItem(cleanupKey); const todayStr = new Date().toISOString().slice(0, 10); if (lastCleanup !== todayStr) { cleanupOldActivityLogs().catch(() => {}); localStorage.setItem(cleanupKey, todayStr) } }).catch((error) => setBackendError(error instanceof Error ? error.message : 'Unable to load Supabase data')).finally(() => setDataLoading(false))
+    loadAppData().then(async (next) => { const profile = next.users.find((user) => user.id === session.user.id); if (profile) setRole(profile.role); const loginBranch = next.branches.find((item) => profile?.role === 'Admin' || profile?.branchIds.includes(item.id)); const loginKey = `pg95-login:${session.user.id}`; const shouldLogLogin = sessionStorage.getItem(loginKey) !== '1'; const logged = profile && loginBranch && shouldLogLogin ? logActivity(next, { userName: profile.name, userId: profile.id, userRole: profile.role, branchId: loginBranch.id, branchName: loginBranch.name, module: 'Authentication', actionType: 'Login', description: `${profile.role} ${profile.name} logged in.` }) : next; dataRef.current = logged; setData(logged); if (logged !== next) { await persistAppData(next, logged, session.user.id); try { const refreshedLogs = await loadActivityLogs(); const refreshed = { ...logged, activityLogs: refreshedLogs }; dataRef.current = refreshed; setData(refreshed) } catch {}; sessionStorage.setItem(loginKey, '1') }; const cleanupKey = 'pg95-last-cleanup'; const lastCleanup = localStorage.getItem(cleanupKey); const todayStr = new Date().toISOString().slice(0, 10); if (lastCleanup !== todayStr) { cleanupOldActivityLogs().catch(() => {}); localStorage.setItem(cleanupKey, todayStr) } }).catch((error) => setBackendError(error instanceof Error ? error.message : 'Unable to load Supabase data')).finally(() => setDataLoading(false))
   }, [session])
 
   useEffect(() => {
@@ -576,7 +584,13 @@ function App() {
     dataRef.current = logged
     setData(logged)
     persistenceQueue.current = persistenceQueue.current
-      .then(() => persistAppData(previous, logged, currentUser.id))
+      .then(async () => {
+        await persistAppData(previous, logged, currentUser.id)
+        const refreshedLogs = await loadActivityLogs()
+        const refreshed = { ...logged, activityLogs: refreshedLogs }
+        dataRef.current = refreshed
+        setData(refreshed)
+      })
       .catch(async (error) => {
         setBackendError(error instanceof Error ? error.message : 'Supabase update failed')
         try { const refreshed = await loadAppData(); dataRef.current = refreshed; setData(refreshed) } catch { /* Keep the optimistic state when reconciliation is unavailable. */ }
@@ -590,7 +604,13 @@ function App() {
     dataRef.current = next
     setData(next)
     persistenceQueue.current = persistenceQueue.current
-      .then(() => persistAppData(previous, next, currentUser.id))
+      .then(async () => {
+        await persistAppData(previous, next, currentUser.id)
+        const refreshedLogs = await loadActivityLogs()
+        const refreshed = { ...next, activityLogs: refreshedLogs }
+        dataRef.current = refreshed
+        setData(refreshed)
+      })
       .catch(async (error) => {
         setBackendError(error instanceof Error ? error.message : 'Unable to add branch')
         try { const refreshed = await loadAppData(); dataRef.current = refreshed; setData(refreshed) } catch { /* Keep the optimistic state when reconciliation is unavailable. */ }
@@ -677,7 +697,7 @@ function App() {
       dataRef.current = logged
       setData(logged)
       persistenceQueue.current = persistenceQueue.current
-        .then(() => persistAppData(previous, logged, currentUser.id))
+        .then(async () => { await persistAppData(previous, logged, currentUser.id); try { const refreshedLogs = await loadActivityLogs(); const refreshed = { ...logged, activityLogs: refreshedLogs }; dataRef.current = refreshed; setData(refreshed) } catch {} })
         .catch(() => {})
       void supabase.auth.signOut()
       setBranchId('')
@@ -707,14 +727,14 @@ function App() {
       </aside>
       {mobileNav && (
         <div className="no-print fixed inset-0 z-40 bg-slate-950/40 lg:hidden">
-          <aside className="h-full w-72 bg-slate-950 p-4 text-white shadow-2xl">
-            <div className="mb-6 flex items-center justify-between gap-3">
+          <aside className="flex h-full w-72 flex-col bg-slate-950 text-white shadow-2xl" style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}>
+            <div className="flex shrink-0 items-center justify-between gap-3 p-4">
               <div><p className="font-bold">PG 95 Admin</p><p className="text-xs text-slate-400">{branch.name}</p></div>
-              <button aria-label="Close navigation" onClick={() => setMobileNav(false)} className="rounded-md p-2 hover:bg-slate-800"><X size={20} /></button>
+              <button aria-label="Close navigation" onClick={() => setMobileNav(false)} className="flex min-h-11 min-w-11 items-center justify-center rounded-md hover:bg-slate-800"><X size={20} /></button>
             </div>
-            <nav className="grid gap-1">
+            <nav className="grid gap-1 overflow-y-auto p-4 pt-0">
               {nav.map((item) => (
-                <button key={item.label} onClick={() => handleNav(item.label)} className={`flex items-center gap-3 rounded-md px-3 py-2 text-left text-sm transition ${page === item.label ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800 hover:text-white'}`}>
+                <button key={item.label} onClick={() => handleNav(item.label)} className={`flex min-h-11 items-center gap-3 rounded-md px-3 py-2 text-left text-sm transition ${page === item.label ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800 hover:text-white'}`}>
                   {item.icon}{item.label}
                 </button>
               ))}
@@ -724,28 +744,30 @@ function App() {
       )}
 
       <div className="lg:pl-64">
-        <header className="no-print sticky top-0 z-20 border-b border-slate-200 bg-white/90 px-4 py-3 backdrop-blur lg:px-6">
-          <div className="flex flex-wrap items-center gap-3">
-            <button aria-label="Open navigation" onClick={() => setMobileNav(true)} className="rounded-md p-2 hover:bg-slate-100 lg:hidden"><Menu size={22} /></button>
-            <div className="min-w-48 flex-1">
-              <h1 className="text-2xl font-black">{page}</h1>
-              <p className="text-sm text-slate-500">{branch.name}</p>
+        <header className="no-print sticky top-0 z-20 border-b border-slate-200 bg-white/90 px-4 backdrop-blur lg:px-6" style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top, 0px))', paddingBottom: '0.75rem' }}>
+          <div className="flex flex-wrap items-center gap-2">
+            <button aria-label="Open navigation" onClick={() => setMobileNav(true)} className="flex min-h-11 min-w-11 items-center justify-center rounded-md hover:bg-slate-100 lg:hidden"><Menu size={22} /></button>
+            <div className="min-w-36 flex-1">
+              <h1 className="text-xl font-black leading-tight sm:text-2xl">{page}</h1>
+              <p className="truncate text-xs text-slate-500 sm:text-sm">{branch.name}</p>
             </div>
-            {can('add_cashbook') && <Button tone="green" onClick={() => setModal('cashbook')}><Plus size={18} /> Add Entry</Button>}
-            {can('admit_tenant') && <Button tone="blue" onClick={() => setModal('admit')}><UserPlus size={18} /> Admit Tenant</Button>}
-            <div className="relative min-w-56 flex-1 md:max-w-sm">
-              <Search className="absolute left-3 top-2.5 text-slate-400" size={18} />
-              <input value={query} onChange={(event) => setQuery(event.target.value)} className={`${inputClass} w-full pl-10`} placeholder="Search tenants, rooms, invoices..." />
-              {searchHits.length > 0 && <div className="absolute mt-2 w-full rounded-md border border-slate-200 bg-white p-2 shadow-lg">{searchHits.map((hit) => <p key={hit} className="truncate rounded px-2 py-1 text-sm hover:bg-slate-50">{hit}</p>)}</div>}
+            <div className="order-last flex w-full flex-wrap items-center gap-2 sm:order-none sm:w-auto">
+              {can('add_cashbook') && <Button tone="green" onClick={() => setModal('cashbook')}><Plus size={18} /> <span className="hidden sm:inline">Add Entry</span></Button>}
+              {can('admit_tenant') && <Button tone="blue" onClick={() => setModal('admit')}><UserPlus size={18} /> <span className="hidden sm:inline">Admit Tenant</span></Button>}
+              <div className="relative min-w-0 flex-1 sm:min-w-56 md:max-w-sm">
+                <Search className="absolute left-3 top-2.5 text-slate-400" size={18} />
+                <input value={query} onChange={(event) => setQuery(event.target.value)} className={`${inputClass} w-full pl-10`} placeholder="Search..." />
+                {searchHits.length > 0 && <div className="absolute mt-2 w-full rounded-md border border-slate-200 bg-white p-2 shadow-lg">{searchHits.map((hit) => <p key={hit} className="truncate rounded px-2 py-1 text-sm hover:bg-slate-50">{hit}</p>)}</div>}
+              </div>
+              <div className="relative">
+                <button onClick={() => setModal('notifications')} className="flex min-h-11 min-w-11 items-center justify-center rounded-md border border-slate-200 bg-white"><Bell size={20} />{notifications.length > 0 && <span className="absolute -right-1 -top-1 rounded-full bg-rose-600 px-1.5 text-xs font-bold text-white">{notifications.length}</span>}</button>
+              </div>
+              <button className="flex shrink-0 items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-2 text-xs font-bold sm:px-3 sm:text-sm"><ShieldCheck className="shrink-0" size={16} /> <span className="hidden sm:inline">{currentUser.name} · {role}</span></button>
             </div>
-            <div className="relative">
-              <button onClick={() => setModal('notifications')} className="relative rounded-md border border-slate-200 bg-white p-2"><Bell size={20} />{notifications.length > 0 && <span className="absolute -right-1 -top-1 rounded-full bg-rose-600 px-1.5 text-xs font-bold text-white">{notifications.length}</span>}</button>
-            </div>
-            <button className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-bold"><ShieldCheck className="mr-1 inline" size={16} /> {currentUser.name} · {role}</button>
           </div>
         </header>
 
-        <main className="p-4 lg:p-6">
+        <main className="p-3 lg:p-6" style={{ minHeight: 'calc(100dvh - 3.5rem - env(safe-area-inset-top, 0px))' }}>
           {backendError && <div className="mb-4 flex items-center justify-between gap-3 rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700"><span>{backendError}</span><button aria-label="Dismiss error" onClick={() => setBackendError('')}><X size={16} /></button></div>}
           {page === 'Dashboard' && <Dashboard scoped={scoped} setModal={setModal} setPage={setPage} setTenantTab={setTenantTab} setTenantFilter={setTenantFilter} setRoomFloor={setRoomFloor} setFinanceTab={setFinanceTab} setPaymentFilter={setPaymentFilter} setTicketFilter={setTicketFilter} />}
           {page === 'Tenants' && <TenantsPage key={branch?.id} data={data} scoped={scoped} tenantTab={tenantTab} setTenantTab={setTenantTab} filter={tenantFilter} setFilter={setTenantFilter} setModal={setModal} setSelectedTenantId={setSelectedTenantId} isAdmin={isAdmin} canAction={can} />}
@@ -754,8 +776,8 @@ function App() {
           {page === 'Finance' && <FinancePage scoped={scoped} financeTab={financeTab} setFinanceTab={setFinanceTab} data={data} branch={branch} setModal={setModal} setSelectedTenantId={setSelectedTenantId} setSelectedCashbookId={setSelectedCashbookId} isAdmin={isAdmin} />}
           {page === 'Inventory' && <InventoryPage scoped={scoped} filter={inventoryFilter} setFilter={setInventoryFilter} setModal={setModal} setSelectedInventoryId={setSelectedInventoryId} canAdd={can('add_inventory')} />}
           {page === 'Maintenance' && <MaintenancePage data={data} scoped={scoped} filter={ticketFilter} setFilter={setTicketFilter} setModal={setModal} setSelectedTicketId={setSelectedTicketId} canResolve={can('resolve_maintenance')} canCreate={can('create_maintenance')} />}
-          {page === 'Reports' && <ReportsPage scoped={scoped} data={data} branch={branch} reportRange={reportRange} setReportRange={setReportRange} onExport={(type, format) => { const previous = dataRef.current; const logged = logActivity(previous, { userName: currentUser.name, userId: currentUser.id, userRole: role, branchId, branchName: branch?.name || '', module: 'Report', actionType: 'Export', description: `${role} ${currentUser.name} exported ${type} as ${format} for ${branch?.name}.` }); dataRef.current = logged; setData(logged); persistenceQueue.current = persistenceQueue.current.then(() => persistAppData(previous, logged, currentUser.id)).catch(() => {}) }} />}
-          {page === 'Settings' && isAdmin && <SettingsPage data={data} branch={branch} role={role} isAdmin={isAdmin} setModal={setModal} setSelectedUserId={setSelectedUserId} onDeactivateUser={async (user) => { try { await deactivateStaffAccount(user.id); const refreshed = await loadAppData(); const next = logActivity(refreshed, { userName: currentUser.name, userId: currentUser.id, userRole: role, branchId, branchName: branch.name, module: 'Staff', actionType: 'Deactivate Staff', description: `${role} ${currentUser.name} deactivated staff ${user.name}.` }); await persistAppData(refreshed, next, currentUser.id); setData(next) } catch (error) { setBackendError(error instanceof Error ? error.message : 'Unable to deactivate staff') } }} onToggleBranch={(item, active) => updateData((previous) => ({ ...previous, branches: previous.branches.map((candidate) => candidate.id === item.id ? { ...candidate, active } : candidate) }), active ? 'Reactivate Branch' : 'Deactivate Branch', 'Branches', `${role} ${currentUser.name} ${active ? 'reactivated' : 'deactivated'} branch ${item.name}.`)} />}
+          {page === 'Reports' && <ReportsPage scoped={scoped} data={data} branch={branch} reportRange={reportRange} setReportRange={setReportRange} onExport={(type, format) => { const previous = dataRef.current; const logged = logActivity(previous, { userName: currentUser.name, userId: currentUser.id, userRole: role, branchId, branchName: branch?.name || '', module: 'Report', actionType: 'Export', description: `${role} ${currentUser.name} exported ${type} as ${format} for ${branch?.name}.` }); dataRef.current = logged; setData(logged); persistenceQueue.current = persistenceQueue.current.then(async () => { await persistAppData(previous, logged, currentUser.id); try { const refreshedLogs = await loadActivityLogs(); const refreshed = { ...logged, activityLogs: refreshedLogs }; dataRef.current = refreshed; setData(refreshed) } catch {} }).catch(() => {}) }} />}
+          {page === 'Settings' && isAdmin && <SettingsPage data={data} branch={branch} role={role} isAdmin={isAdmin} setModal={setModal} setSelectedUserId={setSelectedUserId} onDeactivateUser={async (user) => { try { await deactivateStaffAccount(user.id); const refreshed = await loadAppData(); const next = logActivity(refreshed, { userName: currentUser.name, userId: currentUser.id, userRole: role, branchId, branchName: branch.name, module: 'Staff', actionType: 'Deactivate Staff', description: `${role} ${currentUser.name} deactivated staff ${user.name}.` }); await persistAppData(refreshed, next, currentUser.id); const refreshedLogs = await loadActivityLogs(); setData({ ...next, activityLogs: refreshedLogs }) } catch (error) { setBackendError(error instanceof Error ? error.message : 'Unable to deactivate staff') } }} onToggleBranch={(item, active) => updateData((previous) => ({ ...previous, branches: previous.branches.map((candidate) => candidate.id === item.id ? { ...candidate, active } : candidate) }), active ? 'Reactivate Branch' : 'Deactivate Branch', 'Branches', `${role} ${currentUser.name} ${active ? 'reactivated' : 'deactivated'} branch ${item.name}.`)} />}
         </main>
       </div>
 
@@ -842,7 +864,7 @@ function App() {
         try { await deleteCashbookEntryCascade(selectedCashbookId); setData(await loadAppData()) }
         catch (error) { const message = error instanceof Error ? error.message : 'Cashbook deletion failed'; setBackendError(message); throw error }
       }} />}
-      {modal === 'fiveMonthRegister' && <FiveMonthRegisterModal data={data} scoped={scoped} branch={branch} visibleBranches={visibleBranches} onClose={() => setModal('')} onExport={(type, format) => { const previous = dataRef.current; const logged = logActivity(previous, { userName: currentUser.name, userId: currentUser.id, userRole: role, branchId, branchName: branch?.name || '', module: 'Report', actionType: 'Export', description: `${role} ${currentUser.name} exported ${type} as ${format} for ${branch?.name}.` }); dataRef.current = logged; setData(logged); persistenceQueue.current = persistenceQueue.current.then(() => persistAppData(previous, logged, currentUser.id)).catch(() => {}) }} />}
+      {modal === 'fiveMonthRegister' && <FiveMonthRegisterModal data={data} scoped={scoped} branch={branch} visibleBranches={visibleBranches} onClose={() => setModal('')} onExport={(type, format) => { const previous = dataRef.current; const logged = logActivity(previous, { userName: currentUser.name, userId: currentUser.id, userRole: role, branchId, branchName: branch?.name || '', module: 'Report', actionType: 'Export', description: `${role} ${currentUser.name} exported ${type} as ${format} for ${branch?.name}.` }); dataRef.current = logged; setData(logged); persistenceQueue.current = persistenceQueue.current.then(async () => { await persistAppData(previous, logged, currentUser.id); try { const refreshedLogs = await loadActivityLogs(); const refreshed = { ...logged, activityLogs: refreshedLogs }; dataRef.current = refreshed; setData(refreshed) } catch {} }).catch(() => {}) }} />}
       {modal === 'notifications' && <Modal title="Notifications" onClose={() => setModal('')}>{notifications.length ? <div className="grid gap-2">{notifications.map((note) => <div key={note} className="rounded-md bg-orange-50 p-3 text-sm font-semibold text-orange-800">{note}</div>)}</div> : <p>No active alerts.</p>}</Modal>}
     </div>
   )
@@ -893,7 +915,7 @@ function Dashboard({ scoped, setModal, setPage, setTenantTab, setTenantFilter, s
         <Card><button className="w-full text-left" onClick={() => { setTenantTab('Active'); setTenantFilter('Vacating Notice'); setPage('Tenants') }}><h2 className="mb-4 text-lg font-bold">Vacating This Month</h2><div className="grid gap-2">{vacating.length ? vacating.map((tenant) => <div key={tenant.id} className="rounded-md bg-orange-50 p-3 text-sm"><b>{tenant.name}</b><br />Leaving {formatDate(tenant.notice?.expectedLeavingDate)}</div>) : <p className="text-sm text-slate-500">No vacating notices for June.</p>}</div></button></Card>
         <Card><h2 className="mb-4 text-lg font-bold">Alerts</h2><div className="grid gap-2">{alerts.slice(0, 5).map((alert) => <button key={`${alert.type}-${alert.text}`} onClick={() => { if (alert.type === 'maintenance') { setTicketFilter('Active'); setPage('Maintenance') } else if (alert.type === 'vacating') { setTenantTab('Active'); setTenantFilter('Vacating Notice'); setPage('Tenants') } else { setPaymentFilter(alert.text.includes('overdue') ? 'Overdue' : 'All'); setPage('Payments') } }} className="rounded-md bg-rose-50 p-3 text-left text-sm text-rose-800">{alert.text}</button>)}<Button tone="soft" onClick={() => setModal('notifications')}><Bell size={16} /> View all alerts</Button></div></Card>
       </div>
-      <Card><h2 className="mb-4 text-lg font-bold">Recent Activities</h2><div className="grid gap-2 md:grid-cols-2">{scoped.activityLogs.slice(0, 6).map((log) => <div key={log.id} className="rounded-md bg-slate-50 p-3 text-sm"><b>{log.actionType}</b><p className="mt-1 text-slate-600">{log.description}</p></div>)}{!scoped.activityLogs.length && <p className="text-sm text-slate-500">No recent activity.</p>}</div></Card>
+      <Card><h2 className="mb-4 text-lg font-bold">Recent Activities</h2><div className="grid gap-2 md:grid-cols-2">{scoped.activityLogs.slice(0, 6).map((log) => <div key={log.id} className="rounded-md bg-slate-50 p-3 text-sm"><div className="flex flex-wrap justify-between gap-2"><b>{log.actionType}</b><span className="text-xs text-slate-400">{formatDateTime(log.at)}</span></div><p className="mt-1 text-slate-600">{log.description}</p></div>)}{!scoped.activityLogs.length && <p className="text-sm text-slate-500">No recent activity.</p>}</div></Card>
     </div>
   )
 }
@@ -980,7 +1002,7 @@ function FinancePage({ scoped, financeTab, setFinanceTab, data, branch, setModal
   const totalIn = monthEntries.filter((entry) => entry.type === 'Credit').reduce((sum, entry) => sum + entry.amount, 0)
   const totalOut = monthEntries.filter((entry) => entry.type === 'Debit').reduce((sum, entry) => sum + entry.amount, 0)
   let running = opening
-  const rows = monthEntries.map((entry) => { running += entry.type === 'Credit' ? entry.amount : -entry.amount; return { ...entry, running } })
+  const rows = monthEntries.map((entry) => { running += entry.type === 'Credit' ? entry.amount : -entry.amount; return { ...entry, running } }).reverse()
   const interBranchNet = new Map<string, number>()
   for (const entry of data.cashbook) {
     const reference = parseInterBranchReference(entry.reference)
@@ -1054,7 +1076,7 @@ function Tabs({ values, value, onChange }: { values: string[]; value: string; on
 }
 
 function DataTable({ headers, children }: { headers: string[]; children: ReactNode }) {
-  return <Card className="overflow-hidden p-0"><div className="overflow-auto"><table className="w-full min-w-[960px] text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>{headers.map((header) => <th key={header} className="p-3">{header}</th>)}</tr></thead><tbody>{children}</tbody></table></div></Card>
+  return <Card className="overflow-hidden p-0"><div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead className="bg-slate-50 text-xs uppercase text-slate-500"><tr>{headers.map((header) => <th key={header} className="whitespace-nowrap p-3">{header}</th>)}</tr></thead><tbody>{children}</tbody></table></div></Card>
 }
 
 type RejoinPayload = { paymentRequestId: string; roomId: string; rejoinDate: string; dueDate: string; monthlyRent: number; rentReceived: number; paymentDate: string; paymentMode: string }

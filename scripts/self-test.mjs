@@ -131,6 +131,23 @@ data.expenses.push({ id: uid('e'), branchId: selectedBranch, category: 'Grocery'
 data.cashbook.push({ id: uid('c'), branchId: selectedBranch, type: 'Debit', amount: 1000 })
 assert(summarize(data, selectedBranch).expenses === 1000, '9. Expense updates expenses and cashbook debit')
 
+// Standalone Cashbook "Add Entry" flow
+const creditEntry = { id: uid('c'), branchId: selectedBranch, type: 'Credit', amount: 200, description: 'Standalone credit', date: '2026-06-27', source: 'Manual', category: 'Other Income', paymentMode: 'Cash', reference: '', remarks: '' }
+const debitEntry = { id: uid('c'), branchId: selectedBranch, type: 'Debit', amount: 150, description: 'Standalone debit', date: '2026-06-27', source: 'Manual', category: 'Miscellaneous', paymentMode: 'Online', reference: '', remarks: '' }
+const cashbookBefore = data.cashbook.length
+data.cashbook = [creditEntry, debitEntry, ...data.cashbook]
+assert(data.cashbook.length === cashbookBefore + 2, '9b. Standalone Cashbook credit+debit creates two entries')
+const standaloneCredit = data.cashbook.find((e) => e.id === creditEntry.id)
+const standaloneDebit = data.cashbook.find((e) => e.id === debitEntry.id)
+assert(standaloneCredit?.type === 'Credit' && standaloneDebit?.type === 'Debit', '9c. Standalone Cashbook entries preserve Credit/Debit type')
+const standaloneTotalIn = data.cashbook.filter((e) => e.type === 'Credit').reduce((s, e) => s + e.amount, 0)
+const standaloneTotalOut = data.cashbook.filter((e) => e.type === 'Debit').reduce((s, e) => s + e.amount, 0)
+assert(standaloneTotalIn - standaloneTotalOut >= 0, '9d. Standalone Cashbook net balance remains non-negative')
+const manualIds = data.cashbook.filter((e) => e.source === 'Manual').map((e) => e.id)
+assert(manualIds[0] === creditEntry.id && manualIds[1] === debitEntry.id, '9e. Standalone Cashbook entries prepended in insertion order')
+data.cashbook = data.cashbook.filter((e) => e.id !== creditEntry.id && e.id !== debitEntry.id)
+assert(data.cashbook.length === cashbookBefore, '9f. Standalone Cashbook entries can be removed')
+
 const linkedExpense = { id: 'linked-expense', branchId: 'b1', category: 'Miscellaneous', amount: 250, cashbookId: 'linked-debit' }
 data.expenses.push(linkedExpense)
 data.cashbook.push({ id: 'linked-debit', branchId: 'b1', type: 'Debit', amount: 250, linkedId: linkedExpense.id, source: 'Expense' })
