@@ -306,6 +306,8 @@ const formatDateTime = (value: string) => {
 const uid = (_prefix: string) => crypto.randomUUID()
 const daysUntil = (date: string) =>
   Math.ceil((new Date(`${date}T00:00:00`).getTime() - new Date(`${today}T00:00:00`).getTime()) / 86400000)
+const vacateDueDays = (expectedLeavingDate: string) =>
+  Math.ceil((new Date(`${today}T00:00:00`).getTime() - new Date(`${expectedLeavingDate}T00:00:00`).getTime()) / 86400000)
 const currentMonthRentDueDate = (dueDate: string, reference = today) => {
   const dueDay = new Date(`${dueDate}T00:00:00`).getDate()
   const current = new Date(`${reference}T00:00:00`)
@@ -687,7 +689,8 @@ function App() {
   const notifications = [
     ...scoped.activeTenants.filter((tenant) => { const state = scoped.rentStates.get(tenant.id); return state && state.pending > 0 && daysUntil(state.dueDate) <= 3 }).map((tenant) => `${tenant.name}: rent ${scoped.rentStates.get(tenant.id)?.status === 'Overdue' ? 'overdue' : 'due soon'}`),
     ...scoped.openTickets.map((ticket) => `Open maintenance: ${ticket.title}`),
-    ...scoped.activeTenants.filter((tenant) => tenant.status === 'Notice').map((tenant) => `Vacating notice: ${tenant.name}`),
+    ...scoped.activeTenants.filter((tenant) => tenant.notice?.expectedLeavingDate && today >= tenant.notice.expectedLeavingDate).map((tenant) => { const days = vacateDueDays(tenant.notice!.expectedLeavingDate); return `${tenant.name}: VACATE ${days === 0 ? 'DUE TODAY' : `OVERDUE ${days} DAY${days !== 1 ? 'S' : ''}`}` }),
+    ...scoped.activeTenants.filter((tenant) => tenant.status === 'Notice' && (!tenant.notice?.expectedLeavingDate || today < tenant.notice.expectedLeavingDate)).map((tenant) => `Vacating notice: ${tenant.name}`),
   ]
 
   const nav = ([
@@ -900,10 +903,15 @@ function Dashboard({ scoped, setModal, setPage, setTenantTab, setTenantFilter, s
   }))
   const roomDistribution = ['Single', 'Double', 'Triple', 'Suite'].map((type) => ({ name: type, value: scoped.rooms.filter((room) => room.type === type).length }))
   const vacating = scoped.activeTenants.filter((tenant) => tenant.notice?.expectedLeavingDate.startsWith(currentMonth))
+  const vacateDueTenants = scoped.activeTenants.filter((tenant) => tenant.notice?.expectedLeavingDate && today >= tenant.notice.expectedLeavingDate)
   const alerts = [
+    ...vacateDueTenants.map((tenant) => {
+      const days = vacateDueDays(tenant.notice!.expectedLeavingDate)
+      return { type: 'vacateDue', text: `${tenant.name} vacate overdue by ${days} day${days !== 1 ? 's' : ''} (was due ${formatDate(tenant.notice!.expectedLeavingDate)})` }
+    }),
     ...scoped.activeTenants.filter((tenant) => ['Pending', 'Overdue'].includes(scoped.rentStates.get(tenant.id)?.status || '')).map((tenant) => { const state = scoped.rentStates.get(tenant.id)!; return { type: 'payment', text: `${tenant.name} has ${money(state.pending)} ${state.status.toLowerCase()} for ${state.period}` } }),
     ...scoped.openTickets.map((ticket) => ({ type: 'maintenance', text: `Maintenance: ${ticket.title}` })),
-    ...vacating.map((tenant) => ({ type: 'vacating', text: `${tenant.name} is leaving ${formatDate(tenant.notice?.expectedLeavingDate)}` })),
+    ...vacating.filter((tenant) => !vacateDueTenants.includes(tenant)).map((tenant) => ({ type: 'vacating', text: `${tenant.name} is leaving ${formatDate(tenant.notice?.expectedLeavingDate)}` })),
   ]
   return (
     <div className="grid gap-4">
@@ -920,6 +928,7 @@ function Dashboard({ scoped, setModal, setPage, setTenantTab, setTenantFilter, s
         <Metric icon={<Wrench />} label="Open Maintenance Tickets" value={scoped.openTickets.length} tone="orange" onClick={() => { setTicketFilter('Active'); setPage('Maintenance') }} />
         <Metric icon={<UserPlus />} label="New Admissions" value={newAdmissions} onClick={() => setPage('Tenants')} />
         <Metric icon={<LogOut />} label="Vacated This Month" value={vacatedThisMonth} onClick={() => { setTenantTab('Left PG'); setPage('Tenants') }} />
+        {vacateDueTenants.length > 0 && <Metric icon={<CalendarClock />} label="Vacate Due" value={`${vacateDueTenants.length} TENANT${vacateDueTenants.length !== 1 ? 'S' : ''}`} tone="red" onClick={() => { setTenantTab('Active'); setTenantFilter('Vacate Due'); setPage('Tenants') }} />}
         <Metric icon={<CalendarClock />} label="Upcoming Due Rent" value={upcomingDue} tone="orange" onClick={() => setPage('Payments')} />
       </div>
       <div className="grid gap-4 xl:grid-cols-[1.5fr_1fr]">
@@ -928,8 +937,8 @@ function Dashboard({ scoped, setModal, setPage, setTenantTab, setTenantFilter, s
       </div>
       <div className="grid gap-4 xl:grid-cols-3">
         <Card><h2 className="mb-4 text-lg font-bold">Occupancy Trend</h2><div className="h-48"><ResponsiveContainer><AreaChart data={months.map((item, index) => ({ month: item.month, occupancy: Math.min(100, scoped.occupancyRate - 12 + index * 3) }))}><XAxis dataKey="month" /><YAxis /><Tooltip /><Area dataKey="occupancy" fill="#bfdbfe" stroke="#2563eb" /></AreaChart></ResponsiveContainer></div></Card>
-        <Card><button className="w-full text-left" onClick={() => { setTenantTab('Active'); setTenantFilter('Vacating Notice'); setPage('Tenants') }}><h2 className="mb-4 text-lg font-bold">Vacating This Month</h2><div className="grid gap-2">{vacating.length ? vacating.map((tenant) => <div key={tenant.id} className="rounded-md bg-orange-50 p-3 text-sm"><b>{tenant.name}</b><br />Leaving {formatDate(tenant.notice?.expectedLeavingDate)}</div>) : <p className="text-sm text-slate-500">No vacating notices for June.</p>}</div></button></Card>
-        <Card><h2 className="mb-4 text-lg font-bold">Alerts</h2><div className="grid gap-2">{alerts.slice(0, 5).map((alert) => <button key={`${alert.type}-${alert.text}`} onClick={() => { if (alert.type === 'maintenance') { setTicketFilter('Active'); setPage('Maintenance') } else if (alert.type === 'vacating') { setTenantTab('Active'); setTenantFilter('Vacating Notice'); setPage('Tenants') } else { setPaymentFilter(alert.text.includes('overdue') ? 'Overdue' : 'All'); setPage('Payments') } }} className="rounded-md bg-rose-50 p-3 text-left text-sm text-rose-800">{alert.text}</button>)}<Button tone="soft" onClick={() => setModal('notifications')}><Bell size={16} /> View all alerts</Button></div></Card>
+        <Card><button className="w-full text-left" onClick={() => { setTenantTab('Active'); setTenantFilter('Vacating Notice'); setPage('Tenants') }}><h2 className="mb-4 text-lg font-bold">Vacating This Month</h2><div className="grid gap-2">{vacating.length ? vacating.map((tenant) => { const overdue = tenant.notice?.expectedLeavingDate && today >= tenant.notice.expectedLeavingDate; return <div key={tenant.id} className={`rounded-md p-3 text-sm ${overdue ? 'bg-rose-100 text-rose-800' : 'bg-orange-50'}`}><b>{tenant.name}</b><br />Leaving {formatDate(tenant.notice?.expectedLeavingDate)}{overdue && <span className="ml-2 font-bold">(OVERDUE)</span>}</div> }) : <p className="text-sm text-slate-500">No vacating notices for this month.</p>}</div></button></Card>
+        <Card><h2 className="mb-4 text-lg font-bold">Alerts</h2><div className="grid gap-2">{alerts.slice(0, 5).map((alert) => <button key={`${alert.type}-${alert.text}`} onClick={() => { if (alert.type === 'maintenance') { setTicketFilter('Active'); setPage('Maintenance') } else if (alert.type === 'vacating') { setTenantTab('Active'); setTenantFilter('Vacating Notice'); setPage('Tenants') } else if (alert.type === 'vacateDue') { setTenantTab('Active'); setTenantFilter('Vacate Due'); setPage('Tenants') } else { setPaymentFilter(alert.text.includes('overdue') ? 'Overdue' : 'All'); setPage('Payments') } }} className="rounded-md bg-rose-50 p-3 text-left text-sm text-rose-800">{alert.text}</button>)}<Button tone="soft" onClick={() => setModal('notifications')}><Bell size={16} /> View all alerts</Button></div></Card>
       </div>
       <Card><h2 className="mb-4 text-lg font-bold">Recent Activities</h2><div className="grid gap-2 md:grid-cols-2">{scoped.activityLogs.slice(0, 6).map((log) => <div key={log.id} className="rounded-md bg-slate-50 p-3 text-sm"><div className="flex flex-wrap justify-between gap-2"><b>{log.actionType}</b><span className="text-xs text-slate-400">{formatDateTime(log.at)}</span></div><p className="mt-1 text-slate-600">{log.description}</p></div>)}{!scoped.activityLogs.length && <p className="text-sm text-slate-500">No recent activity.</p>}</div></Card>
     </div>
@@ -944,7 +953,12 @@ function Metric({ icon, label, value, tone = 'blue', onClick }: { icon: ReactNod
 
 function TenantsPage({ data, scoped, tenantTab, setTenantTab, filter, setFilter, setModal, setSelectedTenantId, isAdmin, canAction }: { data: AppData; scoped: ReturnType<typeof branchData>; tenantTab: 'Active' | 'Left PG'; setTenantTab: (value: 'Active' | 'Left PG') => void; filter: string; setFilter: (value: string) => void; setModal: (value: string) => void; setSelectedTenantId: (id: string) => void; isAdmin: boolean; canAction: (permission: string) => boolean }) {
   const [tenantSearch, setTenantSearch] = useState('')
-  const filtered = scoped.activeTenants.filter((tenant) => filter === 'All' || (filter === 'Vacating Notice' ? tenant.status === 'Notice' : scoped.rentStates.get(tenant.id)?.status === filter))
+  const filtered = scoped.activeTenants.filter((tenant) => {
+    if (filter === 'All') return true
+    if (filter === 'Vacating Notice') return tenant.status === 'Notice'
+    if (filter === 'Vacate Due') return !!tenant.notice?.expectedLeavingDate && today >= tenant.notice.expectedLeavingDate
+    return scoped.rentStates.get(tenant.id)?.status === filter
+  })
   const totalSecurityHeld = scoped.activeTenants.reduce((sum, tenant) => sum + tenant.security, 0)
   const searched = useMemo(() => {
     const q = tenantSearch.trim().toLowerCase()
@@ -963,7 +977,7 @@ function TenantsPage({ data, scoped, tenantTab, setTenantTab, filter, setFilter,
       <div className="flex items-center justify-end"><Button tone="soft" onClick={() => setModal('fiveMonthRegister')}><FileBarChart size={16} /> 5 Month Register</Button></div>
       {tenantTab === 'Active' ? <>
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Metric icon={<ShieldCheck />} label="Total Security Held" value={money(totalSecurityHeld)} /></div>
-        <Tabs values={['All', 'Paid', 'Pending', 'Overdue', 'Vacating Notice']} value={filter} onChange={setFilter} />
+        <Tabs values={['All', 'Paid', 'Pending', 'Overdue', 'Vacating Notice', 'Vacate Due']} value={filter} onChange={setFilter} />
         <div className="relative">
           <Search className="absolute left-3 top-2.5 text-slate-400" size={18} />
           <input value={tenantSearch} onChange={(e) => setTenantSearch(e.target.value)} className={`${inputClass} w-full pl-10 pr-10`} placeholder="Search tenant, mobile or room..." />
@@ -979,8 +993,10 @@ function TenantsPage({ data, scoped, tenantTab, setTenantTab, filter, setFilter,
             const securityBalance = Math.max(0, tenant.security - tenant.securityReceived)
             const status = rentState.status
             const whatsapp = `https://wa.me/91${tenant.phone}?text=${encodeURIComponent(`Hi ${tenant.name}, rent ${money(rentState.agreed)} for ${room.number} at ${data.branches.find((branch) => branch.id === tenant.branchId)?.name} is due on ${calculatedRentDueDate}. Balance: ${money(balance)}.`)}`
+            const vacateDueDayCount = tenant.notice?.expectedLeavingDate ? vacateDueDays(tenant.notice.expectedLeavingDate) : null
+            const isVacateDue = vacateDueDayCount !== null && vacateDueDayCount >= 0
             return <tr key={tenant.id} className="border-t border-slate-100">
-              <td className="p-3 font-semibold">{tenant.name}</td><td className="p-3 text-sm">{tenant.email}<br />{tenant.phone}</td><td className="p-3">{room.number}</td><td className="p-3">{room.type}</td><td className="p-3">{money(tenant.monthlyRent)}</td><td className="p-3 text-emerald-700">{money(rentState.received + rentState.advanceApplied)}</td><td className="p-3 text-rose-700">{money(balance)}</td><td className="p-3">{money(tenant.security)}</td><td className="p-3 text-emerald-700">{money(securityReceived)}</td><td className="p-3">{securityBalance === 0 ? <Badge tone="green">Cleared</Badge> : money(securityBalance)}</td><td className="p-3">{tenant.electricity === 'Fixed' ? money(tenant.electricityAmount) : 'Included'}</td><td className="p-3">{formatDate(tenant.joiningDate)}</td><td className="p-3 font-semibold">{formatDate(calculatedRentDueDate)}</td><td className="p-3"><Badge tone={tenant.status === 'Notice' || tenant.status === 'Needs Verification' ? 'orange' : status === 'Clear' || status === 'Paid' ? 'green' : status === 'Overdue' ? 'red' : 'orange'}>{tenant.status === 'Notice' || tenant.status === 'Needs Verification' ? tenant.status : status}</Badge></td>
+              <td className="p-3 font-semibold">{tenant.name}</td><td className="p-3 text-sm">{tenant.email}<br />{tenant.phone}</td><td className="p-3">{room.number}</td><td className="p-3">{room.type}</td><td className="p-3">{money(tenant.monthlyRent)}</td><td className="p-3 text-emerald-700">{money(rentState.received + rentState.advanceApplied)}</td><td className="p-3 text-rose-700">{money(balance)}</td><td className="p-3">{money(tenant.security)}</td><td className="p-3 text-emerald-700">{money(securityReceived)}</td><td className="p-3">{securityBalance === 0 ? <Badge tone="green">Cleared</Badge> : money(securityBalance)}</td><td className="p-3">{tenant.electricity === 'Fixed' ? money(tenant.electricityAmount) : 'Included'}</td><td className="p-3">{formatDate(tenant.joiningDate)}</td><td className="p-3 font-semibold">{formatDate(calculatedRentDueDate)}</td><td className="p-3"><Badge tone={tenant.status === 'Notice' || tenant.status === 'Needs Verification' ? 'orange' : status === 'Clear' || status === 'Paid' ? 'green' : status === 'Overdue' ? 'red' : 'orange'}>{tenant.status === 'Notice' || tenant.status === 'Needs Verification' ? tenant.status : status}</Badge>{isVacateDue && <div className="mt-1"><span className="inline-flex items-center gap-1 rounded-full bg-rose-600 px-2 py-0.5 text-xs font-bold text-white">VACATE {vacateDueDayCount === 0 ? 'DUE TODAY' : `OVERDUE ${vacateDueDayCount}D`}</span><div className="mt-0.5 text-[10px] text-rose-700">Notice: {formatDate(tenant.notice!.expectedLeavingDate)}</div></div>}</td>
               <td className="p-3"><div className="flex min-w-max items-center gap-1"><CompactAction title="View Tenant Ledger" onClick={() => { setSelectedTenantId(tenant.id); setModal('tenantLedger') }}><Eye size={14} /></CompactAction>{isAdmin && <CompactAction title="Edit" onClick={() => { setSelectedTenantId(tenant.id); setModal('editTenant') }}><Edit3 size={14} /></CompactAction>}{canAction('move_tenant') && <CompactAction title="Move" onClick={() => { setSelectedTenantId(tenant.id); setModal('moveTenant') }}><Home size={14} /></CompactAction>}{canAction('add_payment') && <CompactAction title="Add Payment" onClick={() => { setSelectedTenantId(tenant.id); setModal('payment') }}><IndianRupee size={14} /></CompactAction>}<a title="WhatsApp Reminder" aria-label="WhatsApp Reminder" className="grid h-8 w-8 place-items-center rounded-md border border-slate-200 text-emerald-700 hover:bg-emerald-50" href={whatsapp} target="_blank"><MessageCircle size={14} /></a><CompactAction title="Notice" onClick={() => { setSelectedTenantId(tenant.id); setModal('notice') }}><CalendarClock size={14} /></CompactAction>{canAction('vacate_tenant') && <CompactAction title="Vacate" onClick={() => { setSelectedTenantId(tenant.id); setModal('vacate') }}><LogOut size={14} /></CompactAction>}{isAdmin && <CompactAction title="Delete" danger onClick={() => { setSelectedTenantId(tenant.id); setModal('confirmDeleteTenant') }}><Trash2 size={14} /></CompactAction>}</div></td>
             </tr>
           })}

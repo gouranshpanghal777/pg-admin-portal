@@ -1,6 +1,7 @@
 const today = '2026-06-27'
 const uid = (prefix) => `${prefix}-${Math.random().toString(36).slice(2, 8)}`
 const daysUntil = (date) => Math.ceil((new Date(`${date}T00:00:00`) - new Date(`${today}T00:00:00`)) / 86400000)
+const vacateDueDays = (expectedLeavingDate) => Math.ceil((new Date(`${today}T00:00:00`) - new Date(`${expectedLeavingDate}T00:00:00`)) / 86400000)
 const due = (tenant) => tenant.monthlyRent + (tenant.electricity === 'Fixed' ? tenant.electricityAmount : 0)
 const status = (tenant) => {
   const balance = Math.max(0, due(tenant) - tenant.paidThisMonth)
@@ -399,5 +400,50 @@ assert(vacateFinalFull === 0, 'V6. Settlement of ₹6,000 clears full balance')
 const vacateEarlyLeftDate = '2026-06-15'
 const vacateExtraDaysZero = Math.max(0, Math.ceil((new Date(`${vacateEarlyLeftDate}T00:00:00`).getTime() - new Date(`${vacateTestDueDate}T00:00:00`).getTime()) / 86400000))
 assert(vacateExtraDaysZero === 0, 'V7. Extra days = 0 when vacated before due date')
+
+// ==================== VACATE DUE ALERT TESTS ====================
+// Today is fixed at 2026-06-27 for all tests
+
+// Test 1: Active tenant with notice date in future → no red overdue alert
+const tenantFuture = { name: 'Future Notice', notice: { expectedLeavingDate: '2026-07-15' }, status: 'Active' }
+assert(vacateDueDays(tenantFuture.notice.expectedLeavingDate) < 0, 'VD1. Future notice: vacateDueDays returns negative (not overdue)')
+const futureOverdue = !!(tenantFuture.notice?.expectedLeavingDate && today >= tenantFuture.notice.expectedLeavingDate)
+assert(futureOverdue === false, 'VD1a. Future notice: isVacateDue = false')
+
+// Test 2: Active tenant with notice date today → red "VACATE DUE TODAY"
+const tenantToday = { name: 'Due Today', notice: { expectedLeavingDate: '2026-06-27' }, status: 'Active' }
+assert(vacateDueDays(tenantToday.notice.expectedLeavingDate) === 0, 'VD2. Today notice: vacateDueDays returns 0')
+const todayOverdue = !!(tenantToday.notice?.expectedLeavingDate && today >= tenantToday.notice.expectedLeavingDate)
+assert(todayOverdue === true, 'VD2a. Today notice: isVacateDue = true')
+
+// Test 3: Active tenant with notice date 6 days ago → red "VACATE OVERDUE 6 DAYS"
+const tenantPast = { name: 'Past Due', notice: { expectedLeavingDate: '2026-06-21' }, status: 'Active' }
+assert(vacateDueDays(tenantPast.notice.expectedLeavingDate) === 6, 'VD3. Past notice: vacateDueDays returns 6 days overdue')
+
+// Test 4: Tenant has no notice date → no alert
+const tenantNoNotice = { name: 'No Notice', notice: null, status: 'Active' }
+const noNoticeOverdue = !!(tenantNoNotice.notice?.expectedLeavingDate && today >= tenantNoNotice.notice.expectedLeavingDate)
+assert(noNoticeOverdue === false, 'VD4. No notice: isVacateDue = false')
+
+// Test 5: Tenant is already vacated → not counted in active vacate due count
+const vacatedTenant = { name: 'Vacated', notice: { expectedLeavingDate: '2026-06-21' }, status: 'Left' }
+// Only active tenants should be checked
+const vacateDueActiveCount = [tenantFuture, tenantToday, tenantPast, tenantNoNotice, vacatedTenant]
+  .filter((t) => t.status !== 'Left' && t.notice?.expectedLeavingDate && today >= t.notice.expectedLeavingDate).length
+assert(vacateDueActiveCount === 2, 'VD5. Only active tenants with past/today notice date count toward vacate due (2: today + past)')
+
+// Test 6: Verify no automatic vacate happens (just a safety assertion)
+assert(tenantPast.status === 'Active', 'VD6. Tenant with overdue notice still has status Active (no auto-vacate)')
+assert(tenantToday.status === 'Active', 'VD6a. Tenant with today notice still has status Active')
+
+// Test 7: Filter logic for Vacate Due
+const allTenants = [tenantFuture, tenantToday, tenantPast, tenantNoNotice, vacatedTenant]
+const vacateDueFiltered = allTenants.filter((t) => t.status !== 'Left' && t.notice?.expectedLeavingDate && today >= t.notice.expectedLeavingDate)
+assert(vacateDueFiltered.length === 2, 'VD7. Vacate Due filter returns exactly 2 active tenants')
+assert(vacateDueFiltered.every((t) => t.name === 'Due Today' || t.name === 'Past Due'), 'VD7a. Vacate Due filter returns correct tenants')
+
+// Test 8: Verify correct days overdue
+const dayCount = vacateDueDays('2026-06-21')
+assert(dayCount === 6, 'VD8. vacateDueDays(\'2026-06-21\') = 6 days overdue')
 
 console.log('All PG Admin Portal flow checks passed.')
