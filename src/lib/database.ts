@@ -56,6 +56,35 @@ const rows = {
 
 const tableNames: Record<string, string> = { cashbook: 'cashbook_entries', inventory: 'inventory_items', purchases: 'inventory_purchases', tickets: 'maintenance_tickets', activityLogs: 'activity_logs' }
 
+const isTransientNetworkError = (error: { message?: string; code?: string }): boolean =>
+  !error.code && /failed to fetch|networkerror|aborterror|the operation was aborted/i.test(error.message || '')
+
+async function upsertWithRetry(table: string, rows: Record<string, unknown>[]): Promise<void> {
+  const maxAttempts = 3
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const { error } = await supabase.from(table).upsert(rows)
+    if (!error) return
+    if (isTransientNetworkError(error) && attempt < maxAttempts) {
+      await new Promise((resolve) => setTimeout(resolve, 400 * attempt))
+      continue
+    }
+    throw databaseError(`upsert ${table}`, error)
+  }
+}
+
+async function deleteWithRetry(table: string, ids: string[]): Promise<void> {
+  const maxAttempts = 3
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const { error } = await supabase.from(table).delete().in('id', ids)
+    if (!error) return
+    if (isTransientNetworkError(error) && attempt < maxAttempts) {
+      await new Promise((resolve) => setTimeout(resolve, 400 * attempt))
+      continue
+    }
+    throw databaseError(`delete ${table}`, error)
+  }
+}
+
 export async function persistAppData(before: AppData, after: AppData, userId: string): Promise<void> {
   const order: Array<keyof typeof rows> = ['branches', 'rooms', 'tenants', 'invoices', 'payments', 'cashbook', 'expenses', 'categories', 'inventory', 'purchases', 'tickets', 'activityLogs']
   for (const key of order) {
@@ -64,15 +93,64 @@ export async function persistAppData(before: AppData, after: AppData, userId: st
     const oldMap = new Map(oldItems.map((item: any) => [item.id, JSON.stringify(rows[key](item, userId))]))
     const changed = newItems.filter((item: any) => oldMap.get(item.id) !== JSON.stringify(rows[key](item, userId)))
     const table = tableNames[key] || key
-    if (changed.length) { const { error } = await supabase.from(table).upsert(changed.map((item: any) => rows[key](item, userId))); if (error) throw databaseError(`upsert ${table}`, error) }
+    if (changed.length) await upsertWithRetry(table, changed.map((item: any) => rows[key](item, userId)))
   }
   for (const key of [...order].reverse()) {
     const oldItems = (before as any)[key] || []
     const newItems = (after as any)[key] || []
     const removed = oldItems.filter((item: any) => !newItems.some((next: any) => next.id === item.id)).map((item: any) => item.id)
     const table = tableNames[key] || key
-    if (removed.length) { const { error } = await supabase.from(table).delete().in('id', removed); if (error) throw databaseError(`delete ${table}`, error) }
+    if (removed.length) await deleteWithRetry(table, removed)
   }
+}
+
+const AFFECTED_TABLES: Record<string, readonly string[]> = {
+  admit: ['tenants', 'payments', 'cashbook_entries', 'activity_logs', 'payment_obligations', 'security_ledger', 'tenant_advances'] as const,
+  payment: ['tenants', 'payments', 'cashbook_entries', 'activity_logs', 'payment_obligations', 'security_ledger'] as const,
+  vacate: ['tenants', 'rooms', 'cashbook_entries', 'activity_logs', 'payment_obligations', 'security_ledger'] as const,
+  delete_tenant: ['tenants', 'payments', 'cashbook_entries', 'activity_logs', 'payment_obligations', 'security_ledger', 'tenant_advances'] as const,
+  delete_cashbook: ['cashbook_entries'] as const,
+}
+
+export async function refreshTables(tables: readonly string[], currentData: AppData): Promise<AppData> {
+  const entries = await Promise.all(
+    tables.map(async (table) => {
+      const { data, error } = await supabase.from(table).select('*')
+      if (error) throw error
+      return [table, data || []] as const
+    })
+  )
+  const byTable = Object.fromEntries(entries)
+  const r = (table: string) => byTable[table]
+  const next: AppData = { ...currentData }
+  if (r('tenants')) next.tenants = r('tenants').map((r: any) => ({ id: r.id, branchId: r.branch_id, name: r.name, phone: r.phone, email: r.email || '', roomId: r.room_id, bedNo: r.bed_no, monthlyRent: num(r.monthly_rent), security: num(r.security), securityReceived: num(r.security_received), securityBalance: num(r.security_balance ?? num(r.security) - num(r.security_received)), electricity: r.electricity, electricityAmount: num(r.electricity_amount), joiningDate: r.joining_date, dueDate: r.due_date, status: r.status, idProof: r.id_proof || '', paidThisMonth: num(r.paid_this_month), notice: r.notice || undefined, left: r.left_details || undefined, rejoins: r.rejoin_history || [] }))
+  if (r('rooms')) next.rooms = r('rooms').map((r: any) => ({ id: r.id, branchId: r.branch_id, number: r.number, floor: r.floor, type: r.type, beds: r.beds, rent: num(r.rent), electricity: r.electricity, electricityAmount: num(r.electricity_amount), status: r.status, notes: r.notes }))
+  if (r('payments')) next.payments = r('payments').map((r: any) => ({ id: r.id, branchId: r.branch_id, tenantId: r.tenant_id, amount: num(r.amount), date: r.payment_date, month: r.month, status: r.status, invoiceId: r.invoice_id || '', paymentType: normalizePaymentType(r.payment_type), paymentMode: r.payment_mode || 'Cash', description: r.description || '' }))
+  if (r('cashbook_entries')) next.cashbook = r('cashbook_entries').map((r: any) => ({ id: r.id, branchId: r.branch_id, type: r.type, amount: num(r.amount), description: r.description, date: r.entry_date, source: r.source, linkedId: r.linked_id || undefined, category: r.category, categoryId: r.category_id || undefined, paymentMode: r.payment_mode, reference: r.reference, remarks: r.remarks, createdAt: r.created_at }))
+  if (r('activity_logs')) next.activityLogs = r('activity_logs').map((r: any) => ({ id: r.id, branchId: r.branch_id || '', branchName: r.branch_name, userId: r.user_id, userName: r.user_name, role: r.user_role === 'admin' ? 'Admin' : 'Staff', action: r.action_type, entity: r.module, module: r.module, actionType: r.action_type, description: r.description, metadata: r.metadata, at: r.created_at, oldValue: '', newValue: '' } as AppData['activityLogs'][number])).sort((a, b) => b.at.localeCompare(a.at) || b.id.localeCompare(a.id))
+  if (r('payment_obligations')) next.obligations = r('payment_obligations').map((r: any) => ({ id: r.id, branchId: r.branch_id, tenantId: r.tenant_id, period: r.period, paymentType: normalizePaymentType(r.payment_type), agreed: num(r.agreed_amount), received: num(r.received_amount), advanceApplied: num(r.advance_applied), dueDate: r.due_date, status: r.status }))
+  if (r('security_ledger')) next.securityLedger = r('security_ledger').map((r: any) => ({ id: r.id, branchId: r.branch_id, tenantId: r.tenant_id, type: r.movement_type, amount: num(r.amount), date: r.movement_date, reason: r.reason }))
+  if (r('tenant_advances')) next.advances = r('tenant_advances').map((r: any) => ({ id: r.id, branchId: r.branch_id, tenantId: r.tenant_id, type: r.movement_type, amount: num(r.amount), date: r.movement_date, period: r.period, description: r.description }))
+  if (r('invoices')) next.invoices = r('invoices').map((r: any) => ({ id: r.id, branchId: r.branch_id, tenantId: r.tenant_id, number: r.number, period: r.period, createdAt: r.created_at.slice(0, 10) }))
+  if (r('expenses')) next.expenses = r('expenses').map((r: any) => ({ id: r.id, branchId: r.branch_id, category: r.category, categoryId: r.category_id || undefined, description: r.description, amount: num(r.amount), date: r.expense_date, vendor: r.vendor || '', cashbookId: r.cashbook_entry_id || undefined, ticketId: r.maintenance_ticket_id || undefined }))
+  if (r('inventory_items')) next.inventory = r('inventory_items').map((r: any) => ({ id: r.id, branchId: r.branch_id, name: r.name, category: r.category, stock: num(r.stock), unit: r.unit, reorderAt: num(r.reorder_at), lastPurchase: r.last_purchase || '' }))
+  if (r('inventory_purchases')) next.purchases = r('inventory_purchases').map((r: any) => ({ id: r.id, branchId: r.branch_id, itemId: r.item_id, quantity: num(r.quantity), unitCost: num(r.unit_cost), date: r.purchase_date, note: r.note || '', expenseId: r.expense_id || undefined, cashbookId: r.cashbook_entry_id || undefined }))
+  if (r('maintenance_tickets')) next.tickets = r('maintenance_tickets').map((r: any) => ({ id: r.id, branchId: r.branch_id, title: r.title, status: r.status, roomId: r.room_id, tenantId: r.tenant_id || undefined, category: r.category, priority: r.priority, raisedDate: r.raised_date, assignedTo: r.assigned_to || '', description: r.description || '', ticketNumber: r.ticket_number || undefined, resolution: r.resolution || undefined }))
+  if (r('categories')) next.categories = r('categories').map((r: any) => ({ id: r.id, branchId: r.branch_id, name: r.name }))
+  if (r('branches')) next.branches = r('branches').map((r: any) => ({ id: r.id, name: r.name, address: r.address, active: r.active, floors: r.floors, notes: r.notes, contact: r.contact, maintenanceToken: r.maintenance_token }))
+  if (r('profiles') || r('staff_members') || r('branch_assignments') || r('staff_permissions')) {
+    const staffList = r('staff_members') || []
+    const profileList = r('profiles') || currentData.users.map((u) => ({ id: u.id, name: u.name, phone: u.phone, role: u.role === 'Admin' ? 'admin' : 'staff', active: true }))
+    const assignmentList = r('branch_assignments') || []
+    const permissionList = r('staff_permissions') || []
+    const staffById = new Map(staffList.map((row: any) => [row.id, row]))
+    next.users = profileList.map((r: any) => { const s = staffById.get(r.id); return { id: r.id, name: r.name, phone: r.phone || '', role: r.role === 'admin' ? 'Admin' : 'Staff', active: r.active, email: s?.email || '', username: s?.username || '', branchIds: assignmentList.filter((a: any) => a.user_id === r.id).map((a: any) => a.branch_id), permissions: permissionList.filter((p: any) => p.user_id === r.id && p.allowed).map((p: any) => p.permission) } })
+  }
+  return next
+}
+
+export function getAffectedTables(operation: 'admit' | 'payment' | 'vacate' | 'delete_tenant' | 'delete_cashbook'): readonly string[] {
+  return AFFECTED_TABLES[operation]
 }
 
 const normalizePaymentType = (value: unknown): 'Rent' | 'Security Deposit' | 'Electricity' | 'Other' => {
@@ -174,14 +252,20 @@ async function repairFutureRoutedRentPayment(input: { tenantId: string; branchId
 }
 
 export async function admitTenant(input: { requestId: string; branchId: string; name: string; phone: string; email: string; roomId: string; bedNo: number; joiningDate: string; dueDate: string; monthlyRent: number; security: number; electricity: string; electricityAmount: number; idProof: string }) {
-  const { data, error } = await supabase.rpc('admit_tenant_v2', {
+  const payload = {
     p_request_id: input.requestId, p_branch_id: input.branchId, p_name: input.name,
     p_phone: input.phone, p_email: input.email || '', p_room_id: input.roomId,
     p_bed_no: input.bedNo, p_joining_date: input.joiningDate, p_due_date: input.dueDate,
     p_monthly_rent: input.monthlyRent, p_security: input.security,
     p_electricity: input.electricity, p_electricity_amount: input.electricityAmount,
     p_id_proof: input.idProof || '',
-  })
+  }
+  let response = await supabase.rpc('admit_tenant_v2', payload)
+  if (response.error && !response.error.code && /failed to fetch|networkerror/i.test(response.error.message || '')) {
+    await new Promise((resolve) => window.setTimeout(resolve, 400))
+    response = await supabase.rpc('admit_tenant_v2', payload)
+  }
+  const { data, error } = response
   if (error) throw databaseError('admit_tenant_v2 RPC', error)
   return data as string
 }
