@@ -2,10 +2,15 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
+import PublicMaintenanceRequest from './PublicMaintenanceRequest.tsx'
+
+const path = window.location.pathname
+const maintenanceMatch = path.match(/^\/maintenance\/request\/([a-f0-9]+)$/)
+const tokenFromUrl = maintenanceMatch?.[1]
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    {tokenFromUrl ? <PublicMaintenanceRequest /> : <App />}
   </StrictMode>,
 )
 

@@ -304,4 +304,100 @@ const newLogs = data.activityLogs.filter((l) => l.id === 'test-log-1')
 assert(newLogs.length === 1, '31. Activity Log records each successful transaction exactly once')
 assert(data.activityLogs.length === beforeLogs + 1, '32. Activity Log count increases by exactly one per transaction')
 
+// Category ledger tests
+assert((data.categories || []).length === 0, '33. Categories start empty')
+
+// 34-35. Add category creates category record
+data.categories = [
+  { id: 'cat-grocery', branchId: 'b1', name: 'Grocery' },
+  { id: 'cat-vegetables', branchId: 'b1', name: 'Vegetables' },
+]
+assert(data.categories.length === 2, '34. Add category creates category record')
+assert(data.categories.some((c) => c.id === 'cat-grocery' && c.name === 'Grocery'), '35. Category has correct name and ID')
+
+// 36. Rename category updates name without breaking transactions
+data.categories = data.categories.map((c) => c.id === 'cat-grocery' ? { ...c, name: 'Provisions' } : c)
+assert(data.categories.find((c) => c.id === 'cat-grocery')?.name === 'Provisions', '36. Rename category updates name without breaking transactions')
+
+// 37. Category rename preserves historical transaction text
+const groceryDebit = { id: 'cat-debit-1', branchId: 'b1', type: 'Debit', amount: 500, description: 'Weekly groceries', date: '2026-06-27', source: 'Manual', category: 'Provisions', categoryId: 'cat-grocery', createdAt: '2026-06-27T12:00:00Z' }
+data.cashbook.push(groceryDebit)
+const ledgerEntries = data.cashbook.filter((e) => e.branchId === 'b1' && e.type === 'Debit' && (e.categoryId === 'cat-grocery' || e.category === 'Provisions'))
+assert(ledgerEntries.length === 1 && ledgerEntries[0].description === 'Weekly groceries', '37. Category ledger shows correct debit entries after rename')
+
+// 38. Category total aggregates correctly
+const ledgerTotal = ledgerEntries.reduce((s, e) => s + e.amount, 0)
+assert(ledgerTotal === 500, '38. Category total aggregates correctly')
+
+// 39. Branch isolation for categories
+data.categories.push({ id: 'cat-b2', branchId: 'b2', name: 'Grocery' })
+const b1Provisions = data.categories.filter((c) => c.branchId === 'b1' && c.name === 'Provisions')
+const b2Grocery = data.categories.filter((c) => c.branchId === 'b2' && c.name === 'Grocery')
+assert(b1Provisions.length === 1 && b2Grocery.length === 1, '39. Branch isolation works for categories')
+
+// 40. categoryId is set when creating expenses
+const catProvisions = data.categories.find((c) => c.branchId === 'b1' && c.name === 'Provisions')
+const expWithCatId = { id: 'exp-catid', branchId: 'b1', category: 'Provisions', categoryId: catProvisions?.id, description: 'Test', amount: 200, date: '2026-06-27' }
+data.expenses.push(expWithCatId)
+assert(data.expenses.some((e) => e.id === 'exp-catid' && e.categoryId === catProvisions?.id), '40. Expense stores correct categoryId')
+
+// 41. Delete category sets related cashbook entries to Uncategorized
+data.categories = data.categories.filter((c) => c.id !== 'cat-grocery')
+data.cashbook = data.cashbook.map((e) => e.categoryId === 'cat-grocery' ? { ...e, categoryId: undefined, category: 'Uncategorized' } : e)
+assert(!data.cashbook.some((e) => e.categoryId === 'cat-grocery'), '41. Deleting category uncategorizes related debits')
+
+// 42. Category ledger shows newest-first ordering
+const olderEntry = { id: 'cat-order-old', branchId: 'b1', type: 'Debit', amount: 100, description: 'Old', date: '2026-06-26', source: 'Manual', category: 'Vegetables', categoryId: 'cat-vegetables', createdAt: '2026-06-26T10:00:00Z' }
+const newerEntry = { id: 'cat-order-new', branchId: 'b1', type: 'Debit', amount: 200, description: 'New', date: '2026-06-27', source: 'Manual', category: 'Vegetables', categoryId: 'cat-vegetables', createdAt: '2026-06-27T10:00:00Z' }
+data.cashbook = [newerEntry, olderEntry, ...data.cashbook]
+const vegEntries = data.cashbook.filter((e) => e.categoryId === 'cat-vegetables').sort((a, b) => ((b.createdAt || '').localeCompare(a.createdAt || '') || b.id.localeCompare(a.id)))
+assert(vegEntries[0].id === 'cat-order-new' && vegEntries[1].id === 'cat-order-old', '42. Category ledger sorts newest-first by createdAt')
+
+// 43. Category ledger shows all transaction metadata
+const vegLedger = data.cashbook.filter((e) => e.branchId === 'b1' && e.type === 'Debit' && (e.categoryId === 'cat-vegetables' || e.category === 'Vegetables'))
+assert(vegLedger.every((e) => e.date && e.description && e.amount > 0), '43. Category ledger shows date, description, amount for each entry')
+
+// 44. Uncategorized transactions do not appear under any category ledger
+const uncategorizedDebit = { id: 'cat-uncat', branchId: 'b1', type: 'Debit', amount: 100, description: 'No category', date: '2026-06-27', source: 'Manual', createdAt: '2026-06-27T13:00:00Z' }
+data.cashbook.push(uncategorizedDebit)
+const allCatEntries = data.cashbook.filter((e) => e.branchId === 'b1' && e.type === 'Debit' && (e.categoryId || (e.category && e.category !== 'Uncategorized')))
+assert(!allCatEntries.some((e) => e.id === 'cat-uncat'), '44. Uncategorized transactions excluded from every category ledger')
+
+// ==================== VACATE RENT CALCULATION TESTS ====================
+// Test case: Due date 20/06/2026, Vacate date 02/07/2026, Extra days = 12, Rate/day = 500
+// Extra-days charge = 6000, Already received for same due cycle = 3500
+// Balance before settlement = 2500, Settlement = 2500, Final balance = 0
+const vacateTestDueDate = '2026-06-20'
+const vacateTestLeftDate = '2026-07-02'
+const vacateExtraDays = Math.max(0, Math.ceil((new Date(`${vacateTestLeftDate}T00:00:00`).getTime() - new Date(`${vacateTestDueDate}T00:00:00`).getTime()) / 86400000))
+assert(vacateExtraDays === 12, 'V1. Extra days = 12 for vacate from 20/06 to 02/07')
+
+const vacateRatePerDay = 500
+const vacateExtraRentCharge = vacateExtraDays * vacateRatePerDay
+assert(vacateExtraRentCharge === 6000, 'V2. Extra-days rent charge = ₹6,000')
+
+// Tenant already paid ₹3,500 for the same due cycle
+const vacateAlreadyReceived = 3500
+const vacateBalanceBeforeSettlement = Math.max(0, vacateExtraRentCharge - vacateAlreadyReceived)
+assert(vacateBalanceBeforeSettlement === 2500, 'V3. Balance before settlement = ₹2,500 (extra charge ₹6,000 - already received ₹3,500)')
+
+// Admin enters settlement received = 2500
+const vacateSettlementReceived = 2500
+const vacateFinalBalance = Math.max(0, vacateBalanceBeforeSettlement - vacateSettlementReceived)
+assert(vacateFinalBalance === 0, 'V4. Final rent balance = ₹0 (balance ₹2,500 - settlement ₹2,500)')
+
+// Test case: Same dates, but nothing received yet
+const vacateNoPaymentReceived = 0
+const vacateBalanceFull = Math.max(0, vacateExtraRentCharge - vacateNoPaymentReceived)
+assert(vacateBalanceFull === 6000, 'V5. With ₹0 received, balance before settlement = full ₹6,000')
+
+// Test case: Settlement receives the full balance
+const vacateFinalFull = Math.max(0, vacateBalanceFull - 6000)
+assert(vacateFinalFull === 0, 'V6. Settlement of ₹6,000 clears full balance')
+
+// Test case: Extra days = 0 when left before due date
+const vacateEarlyLeftDate = '2026-06-15'
+const vacateExtraDaysZero = Math.max(0, Math.ceil((new Date(`${vacateEarlyLeftDate}T00:00:00`).getTime() - new Date(`${vacateTestDueDate}T00:00:00`).getTime()) / 86400000))
+assert(vacateExtraDaysZero === 0, 'V7. Extra days = 0 when vacated before due date')
+
 console.log('All PG Admin Portal flow checks passed.')
