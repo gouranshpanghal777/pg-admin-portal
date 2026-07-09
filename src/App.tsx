@@ -817,7 +817,6 @@ function App() {
       <div className="lg:pl-64">
         <header className="no-print sticky top-0 z-20 border-b border-slate-200 bg-white/90 px-4 backdrop-blur lg:px-6" style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top, 0px))', paddingBottom: '0.75rem' }}>
           <div className="flex flex-wrap items-center gap-2">
-            {historyDepthRef.current > 0 && <button aria-label="Go back" onClick={() => window.history.back()} className="flex min-h-11 min-w-11 items-center justify-center rounded-md hover:bg-slate-100 lg:hidden"><ChevronLeft size={22} /></button>}
             <button aria-label="Open navigation" onClick={() => setMobileNav(true)} className="flex min-h-11 min-w-11 items-center justify-center rounded-md hover:bg-slate-100 lg:hidden"><Menu size={22} /></button>
             <div className="min-w-36 flex-1">
               <h1 className="text-xl font-black leading-tight sm:text-2xl">{page}</h1>
