@@ -1561,13 +1561,13 @@ function MoveTenantModal({ tenant, rooms, tenants, onClose, onSubmit, onSwap }: 
     const occupants = tenants.filter((t) => t.roomId === selectedRoom.id && t.status !== 'Left')
     return Array.from({ length: selectedRoom.beds }, (_, i) => {
       const bedNo = i + 1
-      const occupant = occupants.find((t) => t.bedNo === bedNo)
+      const occupant = occupants.find((t) => Number(t.bedNo) === bedNo)
       return { bedNo, occupant: occupant || null }
     })
   }, [selectedRoom, tenants])
   const selectedBedOccupant = useMemo(() => {
     if (!selectedRoomId || selectedBedNo === null) return null
-    return tenants.find((t) => t.roomId === selectedRoomId && t.bedNo === selectedBedNo && t.status !== 'Left') || null
+    return tenants.find((t) => t.roomId === selectedRoomId && Number(t.bedNo) === selectedBedNo && t.status !== 'Left') || null
   }, [selectedRoomId, selectedBedNo, tenants])
   const handleMove = () => {
     if (savingRef.current || selectedBedNo === null) return
@@ -1579,7 +1579,7 @@ function MoveTenantModal({ tenant, rooms, tenants, onClose, onSubmit, onSwap }: 
     if (savingRef.current || !selectedBedOccupant) return
     savingRef.current = true; setSaving(true)
     try {
-      await onSwap(tenant.id, selectedBedOccupant.id, tenant.roomId, tenant.bedNo, selectedBedOccupant.roomId, selectedBedOccupant.bedNo, note)
+      await onSwap(tenant.id, selectedBedOccupant.id, tenant.roomId, Number(tenant.bedNo), selectedBedOccupant.roomId, Number(selectedBedOccupant.bedNo), note)
       onClose()
     } catch { savingRef.current = false; setSaving(false) }
   }
