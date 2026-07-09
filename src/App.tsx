@@ -1598,6 +1598,14 @@ function MoveTenantModal({ tenant, rooms, tenants, onClose, onSubmit, onSwap }: 
           })}
         </select>
       </Field>
+      {selectedRoom && <div className="rounded-md border border-red-400 bg-red-50 p-3 text-[11px] font-mono leading-relaxed">
+        <p className="font-bold text-red-700">MOVE_SWAP_RUNTIME_DEBUG</p>
+        <p><b>Room id:</b> {selectedRoom.id} | <b>number:</b> {selectedRoom.number} | <b>beds:</b> {selectedRoom.beds}</p>
+        <p><b>Tenants in modal:</b> {tenants.length}</p>
+        <p><b>Tenants matching room.id:</b> {tenants.filter((t) => t.roomId === selectedRoom.id && t.status !== 'Left').length} (status !== 'Left') | {tenants.filter((t) => t.roomId === selectedRoom.id).length} (any status)</p>
+        <div><b>Matching tenants:</b>{tenants.filter((t) => t.roomId === selectedRoom.id && t.status !== 'Left').length ? <ul className="mt-1 list-inside list-disc">{tenants.filter((t) => t.roomId === selectedRoom.id && t.status !== 'Left').map((t) => <li key={t.id}>{t.name} | id: {t.id} | status: {t.status} | roomId: "{t.roomId}" | bedNo: "{t.bedNo}" (typeof: {typeof t.bedNo})</li>)}</ul> : <span className="text-red-600"> NONE</span>}</div>
+        <details><summary className="cursor-pointer font-semibold">Raw first 3 tenants</summary><pre className="mt-1 whitespace-pre-wrap break-all bg-white p-1 rounded text-[10px]">{JSON.stringify(tenants.slice(0, 3), null, 2)}</pre></details>
+      </div>}
       {selectedRoom && <>
         <p className="text-sm font-semibold text-slate-700">Beds in Room {selectedRoom.number}:</p>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
