@@ -398,8 +398,8 @@ export async function undoVacateTenant(tenantId: string) {
   if (logError) throw databaseError('log undo vacate', logError)
 }
 
-export async function createStaffAccount(payload: { id?: string; name: string; phone?: string; email?: string; username?: string; password?: string; branchIds: string[]; permissions: string[] }) {
-  const { data, error } = await supabase.functions.invoke('create-staff', { body: payload })
+export async function createStaffAccount(payload: { id?: string; name: string; phone?: string; email?: string; username?: string; password?: string; branchIds: string[]; permissions: string[]; role?: 'Admin' | 'Staff' }) {
+  const { data, error } = await supabase.functions.invoke('create-staff', { body: { ...payload, role: (payload.role || 'Staff').toLowerCase() } })
   if (error) throw error
   if (data?.error) throw new Error(data.error)
   return data
@@ -424,6 +424,18 @@ export async function cleanupOldActivityLogs() {
 
 export async function deactivateStaffAccount(id: string) {
   const { data, error } = await supabase.functions.invoke('create-staff', { body: { id, deactivate: true } })
+  if (error) throw error
+  if (data?.error) throw new Error(data.error)
+}
+
+export async function reactivateUserAccount(id: string) {
+  const { data, error } = await supabase.functions.invoke('create-staff', { body: { id, reactivate: true } })
+  if (error) throw error
+  if (data?.error) throw new Error(data.error)
+}
+
+export async function resetUserPassword(id: string, newPassword: string) {
+  const { data, error } = await supabase.functions.invoke('create-staff', { body: { id, resetPassword: newPassword } })
   if (error) throw error
   if (data?.error) throw new Error(data.error)
 }

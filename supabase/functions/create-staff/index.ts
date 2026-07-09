@@ -22,22 +22,46 @@ Deno.serve(async (request) => {
       if (error) throw error
       return new Response(JSON.stringify({ id: body.id }), { headers: { ...cors, 'Content-Type': 'application/json' } })
     }
+    if (body.resetPassword && body.id) {
+      const { error } = await admin.auth.admin.updateUserById(body.id, { password: body.resetPassword })
+      if (error) throw error
+      return new Response(JSON.stringify({ id: body.id }), { headers: { ...cors, 'Content-Type': 'application/json' } })
+    }
+    if (body.reactivate && body.id) {
+      await admin.from('profiles').update({ active: true }).eq('id', body.id)
+      const { error } = await admin.auth.admin.updateUserById(body.id, { ban_duration: '0s' })
+      if (error) throw error
+      return new Response(JSON.stringify({ id: body.id }), { headers: { ...cors, 'Content-Type': 'application/json' } })
+    }
+    const role = body.role === 'admin' ? 'admin' : 'staff'
+    const isStaff = role === 'staff'
     const email = body.email || `${body.username}@staff.pg95.local`
     let id = body.id as string | undefined
     if (id) {
-      const { error } = await admin.auth.admin.updateUserById(id, { email, password: body.password || undefined, user_metadata: { name: body.name, role: 'staff' } })
+      const { error } = await admin.auth.admin.updateUserById(id, { email, password: body.password || undefined, user_metadata: { name: body.name, role } })
       if (error) throw error
-      await admin.from('branch_assignments').delete().eq('user_id', id)
-      await admin.from('staff_permissions').delete().eq('user_id', id)
+      await admin.from('profiles').update({ name: body.name, phone: body.phone, role, active: true }).eq('id', id)
+      if (isStaff) {
+        await admin.from('branch_assignments').delete().eq('user_id', id)
+        await admin.from('staff_permissions').delete().eq('user_id', id)
+        if (body.branchIds?.length) await admin.from('branch_assignments').insert(body.branchIds.map((branch_id: string) => ({ user_id: id, branch_id, assigned_by: user.id })))
+        if (body.permissions?.length) await admin.from('staff_permissions').insert(body.permissions.map((permission: string) => ({ user_id: id, permission, allowed: true, updated_by: user.id })))
+      } else {
+        await admin.from('branch_assignments').delete().eq('user_id', id)
+        await admin.from('staff_permissions').delete().eq('user_id', id)
+        await admin.from('staff_members').delete().eq('id', id)
+      }
     } else {
-      const { data: created, error: authError } = await admin.auth.admin.createUser({ email, password: body.password, email_confirm: true, user_metadata: { name: body.name, role: 'staff' } })
+      const { data: created, error: authError } = await admin.auth.admin.createUser({ email, password: body.password, email_confirm: true, user_metadata: { name: body.name, role } })
       if (authError) throw authError
       id = created.user.id
+      await admin.from('profiles').update({ name: body.name, phone: body.phone, role, active: true }).eq('id', id)
+      if (isStaff) {
+        await admin.from('staff_members').insert({ id, email, username: body.username, created_by: user.id })
+        if (body.branchIds?.length) await admin.from('branch_assignments').insert(body.branchIds.map((branch_id: string) => ({ user_id: id, branch_id, assigned_by: user.id })))
+        if (body.permissions?.length) await admin.from('staff_permissions').insert(body.permissions.map((permission: string) => ({ user_id: id, permission, allowed: true, updated_by: user.id })))
+      }
     }
-    await admin.from('profiles').update({ name: body.name, phone: body.phone, role: 'staff', active: true }).eq('id', id)
-    await admin.from('staff_members').upsert({ id, email, username: body.username, created_by: user.id })
-    if (body.branchIds?.length) await admin.from('branch_assignments').insert(body.branchIds.map((branch_id: string) => ({ user_id: id, branch_id, assigned_by: user.id })))
-    if (body.permissions?.length) await admin.from('staff_permissions').insert(body.permissions.map((permission: string) => ({ user_id: id, permission, allowed: true, updated_by: user.id })))
     return new Response(JSON.stringify({ id }), { headers: { ...cors, 'Content-Type': 'application/json' } })
   } catch (error) {
     return new Response(JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }), { status: 400, headers: { ...cors, 'Content-Type': 'application/json' } })
