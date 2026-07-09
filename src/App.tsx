@@ -1613,6 +1613,7 @@ function MoveTenantModal({ tenant, rooms, tenants, onClose, onSubmit, onSwap }: 
       </>}
       {selectedBedNo !== null && selectedRoom && !selectedBedOccupant && <div className="rounded-md bg-blue-50 p-3">
         <p className="mb-2 text-sm font-semibold text-blue-800">Move to Room {selectedRoom.number} • Bed {selectedBedNo}</p>
+        <Field label="Move date (optional)"><input className={inputClass} type="date" defaultValue={today} /></Field>
         <Field label="Note/reason (optional)"><textarea className={inputClass} value={note} onChange={(e) => setNote(e.target.value)} /></Field>
       </div>}
       {selectedBedOccupant && selectedRoom && <div className="rounded-md border border-amber-200 bg-amber-50 p-3">
