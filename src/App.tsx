@@ -1555,6 +1555,7 @@ function MoveTenantModal({ tenant, rooms, tenants, onClose, onSubmit, onSwap }: 
   const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
   const savingRef = useRef(false)
+  const confirmRef = useRef<HTMLDivElement>(null)
   const selectedRoom = useMemo(() => rooms.find((r) => r.id === selectedRoomId), [rooms, selectedRoomId])
   const beds = useMemo(() => {
     if (!selectedRoom) return []
@@ -1598,20 +1599,12 @@ function MoveTenantModal({ tenant, rooms, tenants, onClose, onSubmit, onSwap }: 
           })}
         </select>
       </Field>
-      {selectedRoom && <div className="rounded-md border border-red-400 bg-red-50 p-3 text-[11px] font-mono leading-relaxed">
-        <p className="font-bold text-red-700">MOVE_SWAP_RUNTIME_DEBUG</p>
-        <p><b>Room id:</b> {selectedRoom.id} | <b>number:</b> {selectedRoom.number} | <b>beds:</b> {selectedRoom.beds}</p>
-        <p><b>Tenants in modal:</b> {tenants.length}</p>
-        <p><b>Tenants matching room.id:</b> {tenants.filter((t) => t.roomId === selectedRoom.id && t.status !== 'Left').length} (status !== 'Left') | {tenants.filter((t) => t.roomId === selectedRoom.id).length} (any status)</p>
-        <div><b>Matching tenants:</b>{tenants.filter((t) => t.roomId === selectedRoom.id && t.status !== 'Left').length ? <ul className="mt-1 list-inside list-disc">{tenants.filter((t) => t.roomId === selectedRoom.id && t.status !== 'Left').map((t) => <li key={t.id}>{t.name} | id: {t.id} | status: {t.status} | roomId: "{t.roomId}" | bedNo: "{t.bedNo}" (typeof: {typeof t.bedNo})</li>)}</ul> : <span className="text-red-600"> NONE</span>}</div>
-        <details><summary className="cursor-pointer font-semibold">Raw first 3 tenants</summary><pre className="mt-1 whitespace-pre-wrap break-all bg-white p-1 rounded text-[10px]">{JSON.stringify(tenants.slice(0, 3), null, 2)}</pre></details>
-      </div>}
       {selectedRoom && <>
         <p className="text-sm font-semibold text-slate-700">Beds in Room {selectedRoom.number}:</p>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
           {beds.map((bed) => (
-            <button key={bed.bedNo} type="button" onClick={() => { setSelectedBedNo(bed.bedNo); setNote('') }}
-              className={`rounded-md border p-2.5 text-left text-xs transition ${selectedBedNo === bed.bedNo ? (bed.occupant ? 'border-amber-400 bg-amber-50 ring-2 ring-amber-200' : 'border-blue-500 bg-blue-50 ring-2 ring-blue-200') : 'border-slate-200 bg-white hover:border-slate-400'}`}>
+            <button key={bed.bedNo} type="button" onClick={() => { setSelectedBedNo(bed.bedNo); setNote(''); setTimeout(() => confirmRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 100) }}
+              className={`cursor-pointer rounded-md border p-2.5 text-left text-xs transition ${selectedBedNo === bed.bedNo ? (bed.occupant ? 'border-amber-400 bg-amber-50 ring-2 ring-amber-200' : 'border-blue-500 bg-blue-50 ring-2 ring-blue-200') : 'border-slate-200 bg-white hover:border-slate-400'}`}>
               <p className="font-semibold text-slate-800">Bed {bed.bedNo}</p>
               {bed.occupant ? <><p className="mt-0.5 truncate text-slate-700">{bed.occupant.name}</p><p className="text-[11px] font-medium text-rose-600">Occupied</p></>
                 : <p className="mt-1 text-[11px] font-medium text-emerald-600">Vacant</p>}
@@ -1619,22 +1612,22 @@ function MoveTenantModal({ tenant, rooms, tenants, onClose, onSubmit, onSwap }: 
           ))}
         </div>
       </>}
-      {selectedBedNo !== null && selectedRoom && !selectedBedOccupant && <div className="rounded-md bg-blue-50 p-3">
+      {selectedBedNo !== null && selectedRoom && !selectedBedOccupant && <div ref={confirmRef} className="rounded-md bg-blue-50 p-3">
         <p className="mb-2 text-sm font-semibold text-blue-800">Move to Room {selectedRoom.number} • Bed {selectedBedNo}</p>
         <Field label="Move date (optional)"><input className={inputClass} type="date" defaultValue={today} /></Field>
         <Field label="Note/reason (optional)"><textarea className={inputClass} value={note} onChange={(e) => setNote(e.target.value)} /></Field>
+        <div className="mt-3 flex justify-end"><Button disabled={saving} onClick={handleMove}>Confirm Move</Button></div>
       </div>}
-      {selectedBedOccupant && selectedRoom && <div className="rounded-md border border-amber-200 bg-amber-50 p-3">
-        <p className="text-sm font-bold text-amber-800">Swap with {selectedBedOccupant.name}</p>
+      {selectedBedOccupant && selectedRoom && <div ref={confirmRef} className="rounded-md border border-amber-200 bg-amber-50 p-3">
+        <p className="text-sm font-bold text-amber-800">Replace / Swap with {selectedBedOccupant.name}</p>
         <div className="mt-3 grid gap-2 text-sm">
           <div className="rounded bg-white p-2"><p className="font-semibold">{tenant.name}</p><p className="text-slate-600">Current: Room {current?.number} • Bed {tenant.bedNo}</p><p className="text-slate-600">New: Room {selectedRoom.number} • Bed {selectedBedNo}</p></div>
           <div className="rounded bg-white p-2"><p className="font-semibold">{selectedBedOccupant.name}</p><p className="text-slate-600">Current: Room {selectedRoom.number} • Bed {selectedBedOccupant.bedNo}</p><p className="text-slate-600">New: Room {current?.number} • Bed {tenant.bedNo}</p></div>
         </div>
+        <div className="mt-3 flex justify-end"><Button disabled={saving} onClick={handleSwap}>Confirm Swap</Button></div>
       </div>}
       <div className="flex justify-end gap-2">
         <Button tone="soft" onClick={onClose}>Cancel</Button>
-        {selectedBedNo !== null && selectedRoom && !selectedBedOccupant && <Button disabled={saving} onClick={handleMove}>Confirm Move</Button>}
-        {selectedBedOccupant && <Button disabled={saving} onClick={handleSwap}>Confirm Swap</Button>}
       </div>
     </div>
   </Modal>
