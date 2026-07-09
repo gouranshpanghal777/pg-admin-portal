@@ -110,6 +110,7 @@ const AFFECTED_TABLES: Record<string, readonly string[]> = {
   vacate: ['tenants', 'rooms', 'cashbook_entries', 'activity_logs', 'payment_obligations', 'security_ledger'] as const,
   delete_tenant: ['tenants', 'payments', 'cashbook_entries', 'activity_logs', 'payment_obligations', 'security_ledger', 'tenant_advances'] as const,
   delete_cashbook: ['cashbook_entries'] as const,
+  swap: ['tenants', 'rooms'] as const,
 }
 
 export async function refreshTables(tables: readonly string[], currentData: AppData): Promise<AppData> {
@@ -149,7 +150,7 @@ export async function refreshTables(tables: readonly string[], currentData: AppD
   return next
 }
 
-export function getAffectedTables(operation: 'admit' | 'payment' | 'vacate' | 'delete_tenant' | 'delete_cashbook'): readonly string[] {
+export function getAffectedTables(operation: 'admit' | 'payment' | 'vacate' | 'delete_tenant' | 'delete_cashbook' | 'swap'): readonly string[] {
   return AFFECTED_TABLES[operation]
 }
 
@@ -425,4 +426,24 @@ export async function deactivateStaffAccount(id: string) {
   const { data, error } = await supabase.functions.invoke('create-staff', { body: { id, deactivate: true } })
   if (error) throw error
   if (data?.error) throw new Error(data.error)
+}
+
+export async function swapTenantRooms(
+  tenantAId: string,
+  tenantBId: string,
+  tenantAExpectedRoomId: string,
+  tenantAExpectedBedNo: number,
+  tenantBExpectedRoomId: string,
+  tenantBExpectedBedNo: number
+): Promise<{ success: boolean; error?: string }> {
+  const { data, error } = await supabase.rpc('swap_tenant_rooms', {
+    p_tenant_a_id: tenantAId,
+    p_tenant_b_id: tenantBId,
+    p_tenant_a_expected_room_id: tenantAExpectedRoomId,
+    p_tenant_a_expected_bed_no: tenantAExpectedBedNo,
+    p_tenant_b_expected_room_id: tenantBExpectedRoomId,
+    p_tenant_b_expected_bed_no: tenantBExpectedBedNo,
+  })
+  if (error) throw databaseError('swap_tenant_rooms RPC', error)
+  return data as { success: boolean; error?: string }
 }
