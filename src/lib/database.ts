@@ -40,11 +40,11 @@ export async function loadActivityLogs(): Promise<AppData['activityLogs']> {
 }
 
 const rows = {
-  branches: (r: any, userId: string) => ({ id: r.id, name: r.name, address: r.address, floors: r.floors || null, notes: r.notes || null, contact: r.contact || null, active: r.active !== false, created_by: userId, updated_at: new Date().toISOString() }),
+  branches: (r: any, userId: string) => ({ id: r.id, name: r.name, address: r.address, floors: r.floors || null, notes: r.notes || null, contact: r.contact || null, active: r.active !== false, created_by: userId }),
   rooms: (r: any, userId: string) => ({ id: r.id, branch_id: r.branchId, number: r.number, floor: r.floor, type: r.type, beds: r.beds, rent: r.rent, electricity: r.electricity, electricity_amount: r.electricityAmount, status: r.status, notes: r.notes || null, created_by: userId, updated_by: userId }),
   tenants: (r: any, userId: string) => ({ id: r.id, branch_id: r.branchId, name: r.name, phone: r.phone, email: r.email || null, room_id: r.roomId, bed_no: r.bedNo, monthly_rent: r.monthlyRent, security: r.security, security_received: r.securityReceived || 0, electricity: r.electricity, electricity_amount: r.electricityAmount, joining_date: r.joiningDate, due_date: r.dueDate, status: r.status, id_proof: r.idProof || null, paid_this_month: r.paidThisMonth, notice: r.notice || null, left_details: r.left || null, rejoin_history: r.rejoins || [], created_by: userId, updated_by: userId }),
   payments: (r: any, userId: string) => ({ id: r.id, branch_id: r.branchId, tenant_id: r.tenantId, amount: r.amount, payment_date: r.date, month: r.month, status: r.status, payment_type: r.paymentType, payment_mode: r.paymentMode || 'Cash', description: r.description || null, invoice_id: r.invoiceId || null, created_by: userId }),
-  cashbook: (r: any, userId: string) => ({ id: r.id, branch_id: r.branchId, type: r.type, amount: r.amount, description: r.description, entry_date: r.date, source: r.source, linked_id: r.linkedId || null, category: r.category || 'Uncategorized', category_id: r.categoryId || null, payment_mode: r.paymentMode || 'Cash', reference: r.reference || null, remarks: r.remarks || null, created_at: r.createdAt || new Date().toISOString(), created_by: userId, updated_by: userId }),
+  cashbook: (r: any, userId: string) => ({ id: r.id, branch_id: r.branchId, type: r.type, amount: r.amount, description: r.description, entry_date: r.date, source: r.source, linked_id: r.linkedId || null, category: r.category || 'Uncategorized', category_id: r.categoryId || null, payment_mode: r.paymentMode || 'Cash', reference: r.reference || null, remarks: r.remarks || null, created_at: r.createdAt, created_by: userId, updated_by: userId }),
   expenses: (r: any, userId: string) => ({ id: r.id, branch_id: r.branchId, category: r.category, category_id: r.categoryId || null, description: r.description, amount: r.amount, expense_date: r.date, vendor: r.vendor || null, cashbook_entry_id: r.cashbookId || null, maintenance_ticket_id: r.ticketId || null, created_by: userId }),
   categories: (r: any, userId: string) => ({ id: r.id, branch_id: r.branchId, name: r.name, created_by: userId }),
   inventory: (r: any, userId: string) => ({ id: r.id, branch_id: r.branchId, name: r.name, category: r.category, stock: r.stock, unit: r.unit, reorder_at: r.reorderAt, last_purchase: r.lastPurchase || null, created_by: userId, updated_by: userId }),
@@ -162,11 +162,21 @@ const normalizePaymentType = (value: unknown): 'Rent' | 'Security Deposit' | 'El
   return 'Rent'
 }
 
+const friendlyDbError = (error: { message?: string; code?: string }): string => {
+  const code = error.code || ''
+  if (code === '42501') return 'You do not have permission to perform this action.'
+  if (code === '23505') return 'This entry already exists.'
+  if (code === '23503') return 'This record is referenced by other data and cannot be modified.'
+  if (code === '22003') return 'The amount entered is invalid.'
+  if (code === 'P0002') return 'The requested record was not found.'
+  if (/failed to fetch|networkerror|aborterror/i.test(error.message || '')) return 'The entry could not be confirmed. Please check your connection and try again.'
+  return error.message || 'Unable to save. Please try again.'
+}
+
 const databaseError = (operation: string, error: { message?: string; code?: string; details?: string; hint?: string }) => {
   const detail = [error.message, error.details, error.hint].filter(Boolean).join(' | ')
-  const result = new Error(`Supabase ${operation} failed${error.code ? ` [${error.code}]` : ''}: ${detail || 'Unknown database error'}`)
-  console.error(result.message, error)
-  return result
+  console.error(`Supabase ${operation} failed${error.code ? ` [${error.code}]` : ''}:`, detail || 'Unknown database error', error)
+  return new Error(friendlyDbError(error))
 }
 
 export async function recordSplitPayment(input: { requestId: string; tenantId: string; branchId: string; rentAmount: number; securityAmount: number; electricityAmount: number; otherAmount: number; paymentDate: string; rentPeriod?: string; paymentMode: string; description: string }) {

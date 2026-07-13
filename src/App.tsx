@@ -662,7 +662,9 @@ function App() {
         setData(refreshed)
       })
       .catch(async (error) => {
-        setBackendError(error instanceof Error ? error.message : 'Supabase update failed')
+        const message = error instanceof Error ? error.message : 'Unable to save. Please try again.'
+        console.error('updateData persistence failed:', error)
+        setBackendError(message)
         try { const refreshed = await loadAppData(); dataRef.current = refreshed; setData(refreshed) } catch { /* Keep the optimistic state when reconciliation is unavailable. */ }
       })
   }
@@ -682,7 +684,7 @@ function App() {
         setData(refreshed)
       })
       .catch(async (error) => {
-        setBackendError(error instanceof Error ? error.message : 'Unable to add branch')
+        setBackendError(error instanceof Error ? error.message : 'Unable to add branch. Please try again.')
         try { const refreshed = await loadAppData(); dataRef.current = refreshed; setData(refreshed) } catch { /* Keep the optimistic state when reconciliation is unavailable. */ }
       })
     closeModal()
@@ -902,7 +904,7 @@ function App() {
           const refreshedPayments = await refreshTables(getAffectedTables('payment'), dataRef.current)
           dataRef.current = refreshedPayments; setData(refreshedPayments)
         } catch (error) {
-          const message = error instanceof Error ? error.message : 'Supabase record_split_payment RPC failed'
+          const message = error instanceof Error ? error.message : 'Payment could not be saved.'
           console.error('Payment save failed:', error)
           setBackendError(message)
           throw error
@@ -1424,6 +1426,7 @@ function PaymentModal({ tenants, payments, obligations, selectedTenantId, onClos
   const rentBalance = rentState?.pending || 0
   const securityReceived = tenant ? Math.max(tenant.securityReceived || 0, paymentTotal(payments, 'Security Deposit', tenant.id, null)) : 0
   const securityBalance = tenant ? Math.max(0, tenant.security - securityReceived) : 0
+  const isFirstTimeSecurity = (tenant?.security || 0) === 0 && (tenant?.securityReceived || 0) === 0
   const selectTenant = (id: string) => {
     setTenantId(id); setRentAmount(0); setSecurityAmount(0); setElectricityAmount(0); setOtherAmount(0); setError('')
   }
@@ -1432,6 +1435,7 @@ function PaymentModal({ tenants, payments, obligations, selectedTenantId, onClos
     if (savingRef.current) return
     const form = new FormData(event.currentTarget)
     if (rentAmount + securityAmount + electricityAmount + otherAmount <= 0) { setError('Enter at least one payment amount.'); return }
+    if (securityAmount > 0 && !isFirstTimeSecurity && securityAmount > securityBalance) { setError(`Security amount (${money(securityAmount)}) exceeds remaining balance of ${money(securityBalance)}.`); return }
     savingRef.current = true; setSaving(true); setError('')
     try {
       await onSubmit({ requestId, tenantId, rentAmount, securityAmount, electricityAmount, otherAmount, paymentDate, rentPeriod: rentState?.period, paymentMode, description: String(form.get('description') || '') })
@@ -1440,7 +1444,7 @@ function PaymentModal({ tenants, payments, obligations, selectedTenantId, onClos
       setError(failure instanceof Error ? failure.message : 'Payment could not be saved.')
     } finally { savingRef.current = false; setSaving(false) }
   }
-  return <Modal title="Add Received Payment" onClose={onClose}><form className="grid gap-4" onSubmit={submit}><Field label="Tenant"><select className={inputClass} value={tenantId} onChange={(event) => selectTenant(event.target.value)}>{tenants.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field><div className="grid grid-cols-2 gap-2 rounded-md bg-slate-50 p-3 text-sm"><p>Rent balance ({rentState?.period || '-'})<br /><b>{money(rentBalance)}</b></p><p>Rent due date<br /><b>{formatDate(rentState?.dueDate)}</b></p><p>Security balance<br /><b>{money(securityBalance)}</b></p><p>Security received<br /><b className="text-emerald-700">{money(securityReceived)}</b></p><p>Security total<br /><b>{money(tenant?.security || 0)}</b></p></div><div className="grid gap-4 sm:grid-cols-2"><Field label="Rent received"><input className={inputClass} type="number" min="0" step="0.01" inputMode="decimal" value={rentAmount || ''} placeholder="0" onWheel={(event) => event.currentTarget.blur()} onChange={(event) => setRentAmount(Number(event.target.value))} /></Field><Field label="Security deposit received"><input className={inputClass} type="number" min="0" step="0.01" inputMode="decimal" max={securityBalance || undefined} value={securityAmount || ''} placeholder="0" onWheel={(event) => event.currentTarget.blur()} onChange={(event) => setSecurityAmount(Number(event.target.value))} /></Field><Field label="Electricity received"><input className={inputClass} type="number" min="0" step="0.01" inputMode="decimal" value={electricityAmount || ''} placeholder="0" onWheel={(event) => event.currentTarget.blur()} onChange={(event) => setElectricityAmount(Number(event.target.value))} /></Field><Field label="Other received"><input className={inputClass} type="number" min="0" step="0.01" inputMode="decimal" value={otherAmount || ''} placeholder="0" onWheel={(event) => event.currentTarget.blur()} onChange={(event) => setOtherAmount(Number(event.target.value))} /></Field></div><div className="grid gap-4 sm:grid-cols-2"><Field label="Payment date"><input name="paymentDate" className={inputClass} type="date" value={paymentDate} onChange={(event) => setPaymentDate(event.target.value)} required /></Field><Field label="Rent month being settled"><input className={inputClass} value={rentState?.period ? formatMonth(rentState.period) : '-'} disabled /></Field><Field label="Payment mode"><select className={inputClass} value={paymentMode} onChange={(event) => setPaymentMode(event.target.value)}><option>Cash</option><option>UPI</option><option>Bank Transfer</option><option>Card</option></select></Field></div><Field label="Description/source optional"><input name="description" className={inputClass} /></Field>{error && <p className="rounded-md bg-rose-50 p-3 text-sm text-rose-700">{error}</p>}<div className="flex justify-end gap-2"><Button tone="soft" onClick={onClose}>Cancel</Button><Button tone="green" type="submit" disabled={saving}>{saving ? 'Saving...' : 'Add Payment'}</Button></div></form></Modal>
+  return <Modal title="Add Received Payment" onClose={onClose}><form className="grid gap-4" onSubmit={submit}><Field label="Tenant"><select className={inputClass} value={tenantId} onChange={(event) => selectTenant(event.target.value)}>{tenants.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field><div className="grid grid-cols-2 gap-2 rounded-md bg-slate-50 p-3 text-sm"><p>Rent balance ({rentState?.period || '-'})<br /><b>{money(rentBalance)}</b></p><p>Rent due date<br /><b>{formatDate(rentState?.dueDate)}</b></p><p>Security balance<br /><b>{money(securityBalance)}</b></p><p>Security received<br /><b className="text-emerald-700">{money(securityReceived)}</b></p><p>Security total<br /><b>{money(tenant?.security || 0)}</b></p></div>{isFirstTimeSecurity && <p className="text-xs text-amber-700 bg-amber-50 rounded-md px-3 py-2">This tenant has no security deposit on record. The amount you enter will set their total security deposit.</p>}<div className="grid gap-4 sm:grid-cols-2"><Field label="Rent received"><input className={inputClass} type="number" min="0" step="0.01" inputMode="decimal" value={rentAmount || ''} placeholder="0" onWheel={(event) => event.currentTarget.blur()} onChange={(event) => setRentAmount(Number(event.target.value))} /></Field><Field label={`Security deposit received${isFirstTimeSecurity ? ' (first-time)' : ''}`}><input className={inputClass} type="number" min="0" step="0.01" inputMode="decimal" max={isFirstTimeSecurity ? undefined : securityBalance} value={securityAmount || ''} placeholder={isFirstTimeSecurity ? 'Enter total security amount' : '0'} onWheel={(event) => event.currentTarget.blur()} onChange={(event) => setSecurityAmount(Number(event.target.value))} /></Field><Field label="Electricity received"><input className={inputClass} type="number" min="0" step="0.01" inputMode="decimal" value={electricityAmount || ''} placeholder="0" onWheel={(event) => event.currentTarget.blur()} onChange={(event) => setElectricityAmount(Number(event.target.value))} /></Field><Field label="Other received"><input className={inputClass} type="number" min="0" step="0.01" inputMode="decimal" value={otherAmount || ''} placeholder="0" onWheel={(event) => event.currentTarget.blur()} onChange={(event) => setOtherAmount(Number(event.target.value))} /></Field></div><div className="grid gap-4 sm:grid-cols-2"><Field label="Payment date"><input name="paymentDate" className={inputClass} type="date" value={paymentDate} onChange={(event) => setPaymentDate(event.target.value)} required /></Field><Field label="Rent month being settled"><input className={inputClass} value={rentState?.period ? formatMonth(rentState.period) : '-'} disabled /></Field><Field label="Payment mode"><select className={inputClass} value={paymentMode} onChange={(event) => setPaymentMode(event.target.value)}><option>Cash</option><option>UPI</option><option>Bank Transfer</option><option>Card</option></select></Field></div><Field label="Description/source optional"><input name="description" className={inputClass} /></Field>{error && <p className="rounded-md bg-rose-50 p-3 text-sm text-rose-700">{error}</p>}<div className="flex justify-end gap-2"><Button tone="soft" onClick={onClose}>Cancel</Button><Button tone="green" type="submit" disabled={saving}>{saving ? 'Saving...' : 'Add Payment'}</Button></div></form></Modal>
 }
 
 function NoticeModal({ onClose, onSubmit }: { onClose: () => void; onSubmit: (notice: NonNullable<Tenant['notice']>) => void }) {
