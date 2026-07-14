@@ -16,7 +16,19 @@ createRoot(document.getElementById('root')!).render(
 
 if ('serviceWorker' in navigator) {
   if (import.meta.env.PROD) {
-    window.addEventListener('load', () => { void navigator.serviceWorker.register('/sw.js') })
+    let refreshing = false
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (refreshing) return
+      refreshing = true
+      window.location.reload()
+    })
+
+    window.addEventListener('load', () => {
+      void navigator.serviceWorker
+        .register('/sw.js', { updateViaCache: 'none' })
+        .then((registration) => registration.update())
+        .catch((error) => console.warn('Service worker registration failed', error))
+    })
   } else {
     void navigator.serviceWorker.getRegistrations().then((registrations) =>
       Promise.all(registrations.map((registration) => registration.unregister())),
