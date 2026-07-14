@@ -1459,7 +1459,7 @@ type TenantRentState = ReturnType<typeof getRentLedgerState>
 
 function EditTenantModal({ tenant, rentState, rooms, tenants, onClose, onSubmit }: { tenant: Tenant; rentState: TenantRentState; rooms: Room[]; tenants: Tenant[]; onClose: () => void; onSubmit: (changes: TenantEditChanges) => Promise<void> }) {
   const [roomId, setRoomId] = useState(tenant.roomId)
-  const [rentBalance, setRentBalance] = useState(rentState.pending)
+  const [rentBalanceInput, setRentBalanceInput] = useState(String(rentState.pending))
   const [rentDueDate, setRentDueDate] = useState(rentState.dueDate)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -1476,6 +1476,7 @@ function EditTenantModal({ tenant, rentState, rooms, tenants, onClose, onSubmit 
     const nextFreeBed = Array.from({ length: room.beds }, (_, index) => index + 1).find((bed) => !occupiedBeds.has(bed))
     const bedNo = roomId === tenant.roomId ? tenant.bedNo : nextFreeBed
     if (!bedNo) { setError(`Room ${room.number} has no vacant bed.`); return }
+    const rentBalance = Number(rentBalanceInput || 0)
     const balanceChanged = Math.abs(rentBalance - rentState.pending) > 0.009
     const dueDateChanged = rentDueDate !== rentState.dueDate
     setSaving(true)
@@ -1525,7 +1526,7 @@ function EditTenantModal({ tenant, rentState, rooms, tenants, onClose, onSubmit 
     <div className="md:col-span-2 grid gap-3 rounded-md border border-amber-200 bg-amber-50 p-4">
       <div><p className="font-bold text-amber-900">Rent Ledger Adjustment</p><p className="text-xs text-amber-800">Period: {formatMonth(rentState.period)} · Already received: {money(rentState.received)} · Advance applied: {money(rentState.advanceApplied)}</p></div>
       <div className="grid gap-4 md:grid-cols-2">
-        <Field label="Current rent balance"><input className={inputClass} type="number" min="0" step="0.01" inputMode="decimal" value={rentBalance} onWheel={(event) => event.currentTarget.blur()} onChange={(event) => setRentBalance(Math.max(0, Number(event.target.value)))} required /></Field>
+        <Field label="Current rent balance"><input className={inputClass} type="text" inputMode="decimal" pattern="[0-9]*[.]?[0-9]{0,2}" value={rentBalanceInput} onFocus={(event) => event.currentTarget.select()} onWheel={(event) => event.currentTarget.blur()} onChange={(event) => { const next = event.target.value; if (next === '' || /^\d*\.?\d{0,2}$/.test(next)) setRentBalanceInput(next.replace(/^0+(?=\d)/, '')) }} required /></Field>
         <Field label="Current rent due date"><input className={inputClass} type="date" value={rentDueDate} onChange={(event) => setRentDueDate(event.target.value)} required /></Field>
       </div>
       <p className="text-xs text-amber-800"><b>Safe edit:</b> changing these fields adjusts only this rent ledger obligation. Existing payments, cashbook entries, invoices, security entries and old activity history are not deleted or rewritten.</p>
