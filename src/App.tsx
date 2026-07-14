@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase, supabaseConfigured } from './lib/supabase'
-import { admitTenant, cleanupOldActivityLogs, createStaffAccount, deactivateStaffAccount, deleteBranchCascade, deleteCashbookEntryCascade, deleteTenantWithPayments, getAffectedTables, getBranchRentCollectionSummary, loadAppData, loadActivityLogs, persistAppData, reactivateUserAccount, recordSplitPayment, refreshTables, resetUserPassword, swapTenantRooms, undoVacateTenant, updateUnsettledTenantRent, vacateTenantErp } from './lib/database'
+import { admitTenant, cleanupOldActivityLogs, createStaffAccount, deactivateStaffAccount, deleteBranchCascade, deleteCashbookEntryCascade, deleteTenantWithPayments, editTenantWithRentAdjustment, getAffectedTables, getBranchRentCollectionSummary, loadAppData, loadActivityLogs, persistAppData, reactivateUserAccount, recordSplitPayment, refreshTables, resetUserPassword, swapTenantRooms, undoVacateTenant, vacateTenantErp } from './lib/database'
 import type { RentCollectionSummary } from './lib/database'
 import { importedRentPaidMonths } from './data/farukhnagarRentRegister'
 import {
@@ -343,7 +343,7 @@ function getRentLedgerState(tenant: Tenant, payments: Payment[], obligations: Pa
   }
   const currentStay = tenant.rejoins?.at(-1)
   const cycleStartDate = currentStay?.rejoinDate || tenant.joiningDate
-  const dueAnchor = currentStay?.dueDate || tenant.dueDate || cycleStartDate
+  const dueAnchor = tenant.dueDate || currentStay?.dueDate || cycleStartDate
   const joiningMonth = cycleStartDate.slice(0, 7)
   const importedPaidMonths = new Set(importedRentPaidMonths[tenant.name.trim().toUpperCase()] || [])
   for (const period of periodsBetween(joiningMonth, currentMonth)) {
@@ -354,7 +354,7 @@ function getRentLedgerState(tenant: Tenant, payments: Payment[], obligations: Pa
     const advanceApplied = obligation?.advanceApplied ?? 0
     const pending = Math.max(0, agreed - received - advanceApplied)
     if (pending > 0) {
-      const originalDueDate = rentDueDateForPeriod(dueAnchor, period)
+      const originalDueDate = obligation?.dueDate || rentDueDateForPeriod(dueAnchor, period)
       const hasPartialPayment = received + advanceApplied > 0
       const dueDate = originalDueDate
       const status: RentLedgerStatus = hasPartialPayment ? 'Pending' : originalDueDate < today ? 'Overdue' : originalDueDate === today ? 'Pending' : daysUntil(originalDueDate) <= 3 ? 'Upcoming' : 'Clear'
@@ -941,7 +941,25 @@ function App() {
       {modal === 'notice' && <NoticeModal onClose={closeModal} onSubmit={(notice) => { const tenant = data.tenants.find((item) => item.id === selectedTenantId)!; updateData((previous) => ({ ...previous, tenants: previous.tenants.map((item) => item.id === selectedTenantId ? { ...item, status: 'Notice', notice } : item) }), 'Issue Tenant Notice', 'Tenants', `${role} ${currentUser.name} issued vacating notice to ${tenant.name} in Room ${data.rooms.find((room) => room.id === tenant.roomId)?.number}. Notice details: ${notice}.`) }} />}
       {modal === 'vacate' && (() => { const tenant = data.tenants.find((item) => item.id === selectedTenantId)!; const rentState = scoped.rentStates.get(tenant.id) || rentLedgerState(tenant, scoped.obligations, scoped.payments); return <VacateModal tenant={tenant} dueDate={rentState.dueDate} alreadyReceived={rentState.received} onClose={closeModal} onSubmit={async (left, settlementRequestId) => { setBackendError(''); try { if ((left.settlementReceived || 0) > 0) await recordSplitPayment({ requestId: settlementRequestId, tenantId: tenant.id, branchId, rentAmount: left.settlementReceived || 0, securityAmount: 0, electricityAmount: 0, otherAmount: 0, paymentDate: left.leftDate, rentPeriod: rentState.period, paymentMode: 'Cash', description: `Vacate settlement - ${tenant.name}` }); await vacateTenantErp(selectedTenantId, left); const refreshedVacate = await refreshTables(getAffectedTables('vacate'), dataRef.current); dataRef.current = refreshedVacate; setData(refreshedVacate); refreshRentSummary() } catch (error) { setBackendError(error instanceof Error ? error.message : 'Unable to vacate tenant'); throw error } }} /> })()}
       {modal === 'confirmUndoVacate' && <ConfirmModal title="Undo tenant vacate" message="Restore this tenant to the original room and reverse any security refund or deduction created during vacating? Payment history will remain unchanged." confirmLabel="Undo Vacate" onClose={closeModal} onConfirm={async () => { setBackendError(''); try { await undoVacateTenant(selectedTenantId); const refreshedUndo = await refreshTables(getAffectedTables('vacate'), dataRef.current); dataRef.current = refreshedUndo; setData(refreshedUndo); refreshRentSummary() } catch (error) { const message = error instanceof Error ? error.message : 'Unable to undo tenant vacate'; setBackendError(message); throw error } }} />}
-      {modal === 'editTenant' && <EditTenantModal tenant={data.tenants.find((tenant) => tenant.id === selectedTenantId)!} rooms={scoped.rooms} tenants={scoped.activeTenants} onClose={closeModal} onSubmit={(changes) => { const tenant = data.tenants.find((item) => item.id === selectedTenantId)!; const { applyRentToPending, ...tenantChanges } = changes; updateData((previous) => ({ ...previous, tenants: previous.tenants.map((item) => item.id === selectedTenantId ? { ...item, ...tenantChanges } : item) }), 'Edit Tenant', 'Tenants', `${role} ${currentUser.name} edited tenant ${tenant.name} details. Changed room from ${data.rooms.find((room) => room.id === tenant.roomId)?.number} to ${data.rooms.find((room) => room.id === changes.roomId)?.number}, rent from ${money(tenant.monthlyRent)} to ${money(changes.monthlyRent || 0)}.`); if (applyRentToPending && changes.monthlyRent !== undefined) { persistenceQueue.current = persistenceQueue.current.then(async () => { await updateUnsettledTenantRent(tenant.id, changes.monthlyRent!); const refreshed = await loadAppData(); dataRef.current = refreshed; setData(refreshed); refreshRentSummary() }).catch((error) => setBackendError(error instanceof Error ? error.message : 'Unable to update rent obligations')) } }} />}
+      {modal === 'editTenant' && (() => {
+        const tenant = data.tenants.find((item) => item.id === selectedTenantId)!
+        const rentState = scoped.rentStates.get(tenant.id) || rentLedgerState(tenant, scoped.obligations, scoped.payments)
+        return <EditTenantModal tenant={tenant} rentState={rentState} rooms={scoped.rooms} tenants={scoped.activeTenants} onClose={closeModal} onSubmit={async (changes) => {
+          setBackendError('')
+          try {
+            await editTenantWithRentAdjustment({ tenantId: tenant.id, ...changes })
+            const refreshed = await refreshTables(getAffectedTables('edit_tenant'), dataRef.current)
+            dataRef.current = refreshed
+            setData(refreshed)
+            refreshRentSummary()
+            setSuccessMessage(`${changes.name} updated successfully. Payment and transaction history was preserved.`)
+          } catch (error) {
+            const message = error instanceof Error ? error.message : 'Unable to edit tenant.'
+            setBackendError(message)
+            throw error
+          }
+        }} />
+      })()}
       {modal === 'moveTenant' && <MoveTenantModal tenant={data.tenants.find((tenant) => tenant.id === selectedTenantId)!} rooms={scoped.rooms} tenants={scoped.activeTenants} onClose={closeModal} onSubmit={(roomId, bedNo, note) => { const tenant = data.tenants.find((item) => item.id === selectedTenantId)!; updateData((previous) => ({ ...previous, tenants: previous.tenants.map((item) => item.id === selectedTenantId ? { ...item, roomId, bedNo } : item) }), 'Move Tenant', 'Tenants', `${role} ${currentUser.name} moved tenant ${tenant.name} from Room ${data.rooms.find((room) => room.id === tenant.roomId)?.number} to Room ${data.rooms.find((room) => room.id === roomId)?.number} Bed ${bedNo} on ${formatDate(today)}.${note ? ` Reason: ${note}.` : ''}`) }} onSwap={async (tenantAId, tenantBId, tenantARoomId, tenantABedNo, tenantBRoomId, tenantBBedNo, _note) => { setBackendError(''); try { const result = await swapTenantRooms(tenantAId, tenantBId, tenantARoomId, tenantABedNo, tenantBRoomId, tenantBBedNo); if (!result.success) throw new Error(result.error || 'Swap failed'); const previous = dataRef.current; const tA = previous.tenants.find((t) => t.id === tenantAId); const tB = previous.tenants.find((t) => t.id === tenantBId); const roomA = previous.rooms.find((r) => r.id === tA?.roomId); const roomB = previous.rooms.find((r) => r.id === tB?.roomId); const logged = logActivity(previous, { userName: currentUser.name, userId: currentUser.id, userRole: role, branchId, branchName: branch?.name || '', module: 'Tenants', actionType: 'Swap Tenants', description: `${role} ${currentUser.name} swapped ${tA?.name || 'Tenant A'} and ${tB?.name || 'Tenant B'} between Room ${roomA?.number} Bed ${tA?.bedNo} and Room ${roomB?.number} Bed ${tB?.bedNo}.` }); dataRef.current = logged; setData(logged); await persistAppData(previous, logged, currentUser.id); const refreshedSwap = await refreshTables(getAffectedTables('swap'), dataRef.current); dataRef.current = refreshedSwap; setData(refreshedSwap); setSuccessMessage(`${tA?.name || 'Tenant'} and ${tB?.name || 'Tenant'} swapped successfully.`) } catch (error) { const message = error instanceof Error ? error.message : 'Swap failed'; setBackendError(message); throw error } }} />}
       {modal === 'editBranch' && <BranchModal branch={branch} onClose={closeModal} onDelete={() => openModal('deleteBranch')} onSubmit={(changes) => updateData((previous) => ({ ...previous, branches: previous.branches.map((item) => item.id === branchId ? { ...item, ...changes } : item) }), 'Edit Branch', 'Branches', `${role} ${currentUser.name} changed branch name from ${branch.name} to ${changes.name}. Address changed from ${branch.address} to ${changes.address}.`)} />}
       {modal === 'deleteBranch' && <DeleteBranchConfirmModal branch={branch} onClose={closeModal} onConfirm={async () => { setBackendError(''); await deleteBranchCascade(branchId, currentUser.id, currentUser.name, role, branch?.name); const refreshed = await loadAppData(); setData(refreshed); const remaining = refreshed.branches.filter((item) => item.active !== false && (isAdmin || currentUser.branchIds.includes(item.id))); if (remaining.length) setBranchId(remaining[0].id); else setBranchId(''); closeModal(); }} />}
@@ -1416,12 +1434,107 @@ function CashbookModal({ entry, categories, branches, branchId, onClose, onSubmi
   return <Modal title={entry ? 'Edit Cashbook Entry' : 'Add Cashbook Entry'} onClose={onClose}><form className="grid gap-4 md:grid-cols-2" onSubmit={handleSubmit}><div className="md:col-span-2"><p className="mb-1 text-sm font-semibold text-slate-700">Transaction type</p><div className="grid grid-cols-2 gap-2"><button type="button" aria-pressed={type === 'Credit'} onClick={() => { setType('Credit'); setPartnerEntry(false) }} className={`rounded-md border px-4 py-3 text-sm font-bold transition ${type === 'Credit' ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-slate-200 bg-white text-slate-600 hover:bg-emerald-50'}`}>Credit / In</button><button type="button" aria-pressed={type === 'Debit'} onClick={() => setType('Debit')} className={`rounded-md border px-4 py-3 text-sm font-bold transition ${type === 'Debit' ? 'border-rose-600 bg-rose-600 text-white' : 'border-slate-200 bg-white text-slate-600 hover:bg-rose-50'}`}>Debit / Out</button></div></div><Field label="Amount"><input className={inputClass} type="number" min="0.01" step="0.01" required value={amount || ''} onWheel={(event) => event.currentTarget.blur()} onChange={(event) => setAmount(Number(event.target.value))} /></Field><Field label="Description"><input className={inputClass} required value={description} onChange={(event) => setDescription(event.target.value)} /></Field><Field label="Date"><input className={inputClass} type="date" value={date} onChange={(event) => setDate(event.target.value)} /></Field><Field label="Category"><select className={inputClass} value={category} onChange={(event) => setCategory(event.target.value)}>{options.map((option) => <option key={option} value={option}>{option}</option>)}<option value="__new__">+ New Category</option></select></Field>{category === '__new__' && <Field label="New category"><input name="newCategory" className={inputClass} placeholder="Enter category name" required autoFocus /></Field>}<div className="md:col-span-2 flex items-center justify-between rounded-md border border-slate-400 p-3"><span className="text-sm font-semibold">Inter-branch lena / dena</span><input aria-label="Inter-branch entry" type="checkbox" checked={interBranch} onChange={(event) => { setInterBranch(event.target.checked); if (event.target.checked) setPartnerEntry(false) }} className="h-5 w-5 accent-blue-600" /></div>{interBranch && <><Field label="Other branch"><select className={inputClass} value={counterpartyBranchId} onChange={(event) => setCounterpartyBranchId(event.target.value)} required>{otherBranches.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field><Field label={type === 'Debit' ? 'Amount to receive from branch' : 'Settlement received from branch'}><input className={inputClass} type="number" min="0.01" max={amount || undefined} step="0.01" value={dueAmount || ''} onWheel={(event) => event.currentTarget.blur()} onChange={(event) => setDueAmount(Number(event.target.value))} required /></Field></>}{type === 'Debit' && <><div className="md:col-span-2 flex items-center justify-between rounded-md border border-slate-400 p-3"><div><p className="text-sm font-semibold">Partner personal withdrawal</p><p className="text-xs text-slate-500">Partner ne personal paise liye</p></div><input aria-label="Partner ledger entry" type="checkbox" checked={partnerEntry} onChange={(event) => { setPartnerEntry(event.target.checked); if (event.target.checked) setInterBranch(false) }} className="h-5 w-5 accent-blue-600" /></div>{partnerEntry && <Field label="Partner name"><input className={inputClass} list="partner-names" value={partnerName} onChange={(event) => setPartnerName(event.target.value)} placeholder="Ashish, Pawan, Gouransh..." required /><datalist id="partner-names"><option value="Ashish" /><option value="Pawan" /><option value="Gouransh" /></datalist></Field>}</>}<Field label="Cash / Online"><select name="paymentMode" className={inputClass} defaultValue={entry?.paymentMode || 'Cash'}><option>Cash</option><option>Online</option><option>UPI</option><option>Bank Transfer</option><option>Card</option></select></Field>{!interBranch && !partnerEntry && <Field label="Reference"><input name="reference" className={inputClass} defaultValue={entry?.reference} /></Field>}<Field label="Remarks"><input name="remarks" className={inputClass} defaultValue={entry?.remarks} /></Field><div className="flex justify-end gap-2 md:col-span-2"><Button tone="soft" onClick={onClose}>Cancel</Button><Button disabled={saving} tone={type === 'Credit' ? 'green' : 'red'} type="submit">{entry ? 'Save Changes' : type === 'Credit' ? 'Add Credit' : 'Add Debit'}</Button></div></form></Modal>
 }
 
-type TenantEditChanges = Partial<Tenant> & { applyRentToPending?: boolean }
+type TenantEditChanges = {
+  name: string
+  phone: string
+  email: string
+  roomId: string
+  bedNo: number
+  joiningDate: string
+  monthlyRent: number
+  security: number
+  electricity: Tenant['electricity']
+  electricityAmount: number
+  dueDate: string
+  idProof: string
+  status: Exclude<TenantStatus, 'Left'>
+  rentPeriod: string
+  rentBalance: number
+  rentDueDate: string
+  adjustRentLedger: boolean
+  applyRentToPending: boolean
+}
 
-function EditTenantModal({ tenant, rooms, tenants, onClose, onSubmit }: { tenant: Tenant; rooms: Room[]; tenants: Tenant[]; onClose: () => void; onSubmit: (changes: TenantEditChanges) => void }) {
+type TenantRentState = ReturnType<typeof getRentLedgerState>
+
+function EditTenantModal({ tenant, rentState, rooms, tenants, onClose, onSubmit }: { tenant: Tenant; rentState: TenantRentState; rooms: Room[]; tenants: Tenant[]; onClose: () => void; onSubmit: (changes: TenantEditChanges) => Promise<void> }) {
   const [roomId, setRoomId] = useState(tenant.roomId)
+  const [rentBalance, setRentBalance] = useState(rentState.pending)
+  const [rentDueDate, setRentDueDate] = useState(rentState.dueDate)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
   const available = rooms.filter((room) => room.id === tenant.roomId || (room.status !== 'Maintenance' && tenants.filter((item) => item.roomId === room.id && item.id !== tenant.id).length < room.beds))
-  return <Modal title="Edit Tenant" onClose={onClose}><form className="grid gap-4 md:grid-cols-2" onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); const room = rooms.find((item) => item.id === roomId)!; const occupants = tenants.filter((item) => item.roomId === roomId && item.id !== tenant.id); onSubmit({ name: String(form.get('name')).trim().toUpperCase(), phone: String(form.get('phone')), email: String(form.get('email') || ''), roomId, bedNo: roomId === tenant.roomId ? tenant.bedNo : Math.min(occupants.length + 1, room.beds), joiningDate: String(form.get('joiningDate')), monthlyRent: Number(form.get('monthlyRent')), security: Number(form.get('security')), electricity: String(form.get('electricity')) as Tenant['electricity'], electricityAmount: Number(form.get('electricityAmount')), dueDate: String(form.get('dueDate')), idProof: String(form.get('idProof') || '').replace(/\s/g, ''), status: String(form.get('status')) as TenantStatus, applyRentToPending: form.get('applyRentToPending') === 'on' }); onClose() }}><Field label="Tenant name"><input name="name" className={inputClass} defaultValue={tenant.name} required /></Field><Field label="Phone"><input name="phone" className={inputClass} defaultValue={tenant.phone} required /></Field><Field label="Email"><input name="email" className={inputClass} type="email" defaultValue={tenant.email} placeholder="Optional" /></Field><Field label="Room number"><select className={inputClass} value={roomId} onChange={(event) => setRoomId(event.target.value)}>{available.map((room) => <option key={room.id} value={room.id}>Room {room.number} · {tenants.filter((item) => item.roomId === room.id && item.id !== tenant.id).length}/{room.beds} occupied</option>)}</select></Field><Field label="Joining date"><input name="joiningDate" className={inputClass} type="date" defaultValue={tenant.joiningDate} /></Field><Field label="Monthly rent"><input name="monthlyRent" className={inputClass} type="number" min="0" step="0.01" inputMode="decimal" onWheel={(event) => event.currentTarget.blur()} defaultValue={tenant.monthlyRent} /></Field><Field label="Security deposit"><input name="security" className={inputClass} type="number" min="0" step="0.01" inputMode="decimal" onWheel={(event) => event.currentTarget.blur()} defaultValue={tenant.security} /></Field><Field label="Electricity option"><select name="electricity" className={inputClass} defaultValue={tenant.electricity}><option>Included</option><option>Fixed</option></select></Field><Field label="Electricity amount"><input name="electricityAmount" className={inputClass} type="number" min="0" step="0.01" inputMode="decimal" onWheel={(event) => event.currentTarget.blur()} defaultValue={tenant.electricityAmount} /></Field><Field label="Payment due date"><input name="dueDate" className={inputClass} type="date" defaultValue={tenant.dueDate} /></Field><Field label="Aadhaar number"><input name="idProof" className={inputClass} inputMode="numeric" maxLength={12} pattern="[0-9]{12}" title="Enter a 12-digit Aadhaar number" defaultValue={tenant.idProof.replace(/\s/g, '')} placeholder="Optional, 12 digits" /></Field><Field label="Status"><select name="status" className={inputClass} defaultValue={tenant.status}><option>Active</option><option>Notice</option><option>Needs Verification</option></select></Field><label className="md:col-span-2 flex items-start gap-3 rounded-md border border-blue-200 bg-blue-50 p-3 text-sm"><input name="applyRentToPending" type="checkbox" defaultChecked className="mt-0.5 h-4 w-4 accent-blue-600" /><span><b>Update current pending and future rent balance</b><br /><span className="text-slate-500">Use the new monthly rent for unpaid rent months.</span></span></label><div className="md:col-span-2 flex justify-end gap-2"><Button tone="soft" onClick={onClose}>Cancel</Button><Button type="submit">Save Tenant</Button></div></form></Modal>
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (saving) return
+    const form = new FormData(event.currentTarget)
+    const room = rooms.find((item) => item.id === roomId)
+    if (!room) { setError('Select a valid room.'); return }
+    const occupants = tenants.filter((item) => item.roomId === roomId && item.id !== tenant.id)
+    const occupiedBeds = new Set(occupants.map((item) => item.bedNo))
+    const nextFreeBed = Array.from({ length: room.beds }, (_, index) => index + 1).find((bed) => !occupiedBeds.has(bed))
+    const bedNo = roomId === tenant.roomId ? tenant.bedNo : nextFreeBed
+    if (!bedNo) { setError(`Room ${room.number} has no vacant bed.`); return }
+    const balanceChanged = Math.abs(rentBalance - rentState.pending) > 0.009
+    const dueDateChanged = rentDueDate !== rentState.dueDate
+    setSaving(true)
+    setError('')
+    try {
+      await onSubmit({
+        name: String(form.get('name')).trim().toUpperCase(),
+        phone: String(form.get('phone')),
+        email: String(form.get('email') || ''),
+        roomId,
+        bedNo,
+        joiningDate: String(form.get('joiningDate')),
+        monthlyRent: Number(form.get('monthlyRent')),
+        security: Number(form.get('security')),
+        electricity: String(form.get('electricity')) as Tenant['electricity'],
+        electricityAmount: Number(form.get('electricityAmount')),
+        dueDate: dueDateChanged ? rentDueDate : tenant.dueDate,
+        idProof: String(form.get('idProof') || '').replace(/\s/g, ''),
+        status: String(form.get('status')) as Exclude<TenantStatus, 'Left'>,
+        rentPeriod: rentState.period,
+        rentBalance,
+        rentDueDate,
+        adjustRentLedger: balanceChanged || dueDateChanged,
+        applyRentToPending: form.get('applyRentToPending') === 'on',
+      })
+      onClose()
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Tenant could not be updated.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return <Modal title="Edit Tenant" onClose={onClose}><form className="grid gap-4 md:grid-cols-2" onSubmit={handleSubmit}>
+    <Field label="Tenant name"><input name="name" className={inputClass} defaultValue={tenant.name} required /></Field>
+    <Field label="Phone"><input name="phone" className={inputClass} defaultValue={tenant.phone} required /></Field>
+    <Field label="Email"><input name="email" className={inputClass} type="email" defaultValue={tenant.email} placeholder="Optional" /></Field>
+    <Field label="Room number"><select className={inputClass} value={roomId} onChange={(event) => setRoomId(event.target.value)}>{available.map((room) => <option key={room.id} value={room.id}>Room {room.number} · {tenants.filter((item) => item.roomId === room.id && item.id !== tenant.id).length}/{room.beds} occupied</option>)}</select></Field>
+    <Field label="Joining date"><input name="joiningDate" className={inputClass} type="date" defaultValue={tenant.joiningDate} /></Field>
+    <Field label="Monthly rent"><input name="monthlyRent" className={inputClass} type="number" min="0" step="0.01" inputMode="decimal" onWheel={(event) => event.currentTarget.blur()} defaultValue={tenant.monthlyRent} /></Field>
+    <Field label="Security deposit"><input name="security" className={inputClass} type="number" min="0" step="0.01" inputMode="decimal" onWheel={(event) => event.currentTarget.blur()} defaultValue={tenant.security} /></Field>
+    <Field label="Electricity option"><select name="electricity" className={inputClass} defaultValue={tenant.electricity}><option>Included</option><option>Fixed</option></select></Field>
+    <Field label="Electricity amount"><input name="electricityAmount" className={inputClass} type="number" min="0" step="0.01" inputMode="decimal" onWheel={(event) => event.currentTarget.blur()} defaultValue={tenant.electricityAmount} /></Field>
+    <Field label="Aadhaar number"><input name="idProof" className={inputClass} inputMode="numeric" maxLength={12} pattern="[0-9]{12}" title="Enter a 12-digit Aadhaar number" defaultValue={tenant.idProof.replace(/\s/g, '')} placeholder="Optional, 12 digits" /></Field>
+    <Field label="Status"><select name="status" className={inputClass} defaultValue={tenant.status}><option>Active</option><option>Notice</option><option>Needs Verification</option></select></Field>
+
+    <div className="md:col-span-2 grid gap-3 rounded-md border border-amber-200 bg-amber-50 p-4">
+      <div><p className="font-bold text-amber-900">Rent Ledger Adjustment</p><p className="text-xs text-amber-800">Period: {formatMonth(rentState.period)} · Already received: {money(rentState.received)} · Advance applied: {money(rentState.advanceApplied)}</p></div>
+      <div className="grid gap-4 md:grid-cols-2">
+        <Field label="Current rent balance"><input className={inputClass} type="number" min="0" step="0.01" inputMode="decimal" value={rentBalance} onWheel={(event) => event.currentTarget.blur()} onChange={(event) => setRentBalance(Math.max(0, Number(event.target.value)))} required /></Field>
+        <Field label="Current rent due date"><input className={inputClass} type="date" value={rentDueDate} onChange={(event) => setRentDueDate(event.target.value)} required /></Field>
+      </div>
+      <p className="text-xs text-amber-800"><b>Safe edit:</b> changing these fields adjusts only this rent ledger obligation. Existing payments, cashbook entries, invoices, security entries and old activity history are not deleted or rewritten.</p>
+    </div>
+
+    <label className="md:col-span-2 flex items-start gap-3 rounded-md border border-blue-200 bg-blue-50 p-3 text-sm"><input name="applyRentToPending" type="checkbox" className="mt-0.5 h-4 w-4 accent-blue-600" /><span><b>Apply new monthly rent to other existing unpaid months</b><br /><span className="text-slate-500">Off by default so a normal detail edit never changes old rent ledger entries.</span></span></label>
+    {error && <p className="md:col-span-2 rounded-md bg-rose-50 p-3 text-sm text-rose-700">{error}</p>}
+    <div className="md:col-span-2 flex justify-end gap-2"><Button tone="soft" onClick={onClose}>Cancel</Button><Button type="submit" disabled={saving}>{saving ? 'Saving...' : 'Save Tenant'}</Button></div>
+  </form></Modal>
 }
 
 type InitialAdmissionPayment = { rentAmount: number; securityAmount: number; paymentDate: string; paymentMode: string }

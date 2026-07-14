@@ -118,6 +118,7 @@ export async function persistAppData(before: AppData, after: AppData, userId: st
 const AFFECTED_TABLES: Record<string, readonly string[]> = {
   admit: ['tenants', 'payments', 'cashbook_entries', 'activity_logs', 'payment_obligations', 'security_ledger', 'tenant_advances'] as const,
   payment: ['tenants', 'payments', 'cashbook_entries', 'activity_logs', 'payment_obligations', 'security_ledger'] as const,
+  edit_tenant: ['tenants', 'rooms', 'activity_logs', 'payment_obligations'] as const,
   vacate: ['tenants', 'rooms', 'cashbook_entries', 'activity_logs', 'payment_obligations', 'security_ledger'] as const,
   delete_tenant: ['tenants', 'payments', 'cashbook_entries', 'activity_logs', 'payment_obligations', 'security_ledger', 'tenant_advances'] as const,
   delete_cashbook: ['cashbook_entries'] as const,
@@ -163,7 +164,7 @@ export async function refreshTables(tables: readonly string[], currentData: AppD
   return next
 }
 
-export function getAffectedTables(operation: 'admit' | 'payment' | 'vacate' | 'delete_tenant' | 'delete_cashbook' | 'swap'): readonly string[] {
+export function getAffectedTables(operation: 'admit' | 'payment' | 'edit_tenant' | 'vacate' | 'delete_tenant' | 'delete_cashbook' | 'swap'): readonly string[] {
   return AFFECTED_TABLES[operation]
 }
 
@@ -317,6 +318,52 @@ export async function admitTenant(input: { requestId: string; branchId: string; 
   const verified = await verifyAdmission(input.requestId)
   if (verified) return verified
   throw databaseError('admit_tenant_v2 RPC', lastError as { message?: string; code?: string })
+}
+
+export async function editTenantWithRentAdjustment(input: {
+  tenantId: string
+  name: string
+  phone: string
+  email: string
+  roomId: string
+  bedNo: number
+  joiningDate: string
+  monthlyRent: number
+  security: number
+  electricity: string
+  electricityAmount: number
+  dueDate: string
+  idProof: string
+  status: 'Active' | 'Notice' | 'Needs Verification'
+  rentPeriod: string
+  rentBalance: number
+  rentDueDate: string
+  adjustRentLedger: boolean
+  applyRentToPending: boolean
+}) {
+  const { data, error } = await supabase.rpc('edit_tenant_with_rent_adjustment', {
+    p_tenant_id: input.tenantId,
+    p_name: input.name,
+    p_phone: input.phone,
+    p_email: input.email || '',
+    p_room_id: input.roomId,
+    p_bed_no: input.bedNo,
+    p_joining_date: input.joiningDate,
+    p_monthly_rent: input.monthlyRent,
+    p_security: input.security,
+    p_electricity: input.electricity,
+    p_electricity_amount: input.electricityAmount,
+    p_due_date: input.dueDate,
+    p_id_proof: input.idProof || '',
+    p_status: input.status,
+    p_rent_period: input.rentPeriod,
+    p_rent_balance: input.rentBalance,
+    p_rent_due_date: input.rentDueDate,
+    p_adjust_rent_ledger: input.adjustRentLedger,
+    p_apply_rent_to_pending: input.applyRentToPending,
+  })
+  if (error) throw databaseError('edit_tenant_with_rent_adjustment RPC', error)
+  return data as { tenant_id: string; rent_period: string; rent_balance: number; ledger_adjusted: boolean }
 }
 
 export async function updateUnsettledTenantRent(tenantId: string, monthlyRent: number) {
