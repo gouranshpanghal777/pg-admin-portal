@@ -994,7 +994,7 @@ function Dashboard({ scoped, rentSummary, refreshRentSummary, setModal, setPage,
   return (
     <div className="grid gap-4">
       <div className="grid gap-4 sm:grid-cols-2">
-        <div className="relative overflow-hidden rounded-lg border-2 border-blue-200 bg-blue-50 p-4">
+        <div className="relative overflow-hidden rounded-lg border-2 border-blue-200 bg-blue-50 p-4 shadow-sm">
           <div className="flex items-start justify-between">
             <div>
               <p className="text-sm font-semibold text-blue-700">Expected Rent Till Month End</p>
@@ -1005,7 +1005,7 @@ function Dashboard({ scoped, rentSummary, refreshRentSummary, setModal, setPage,
           </div>
           <p className="mt-2 text-xs text-blue-500" title="Total outstanding rent for all periods up to and including the current month. Includes unpaid balances from previous months and full current month rent regardless of due date.">{rentSummary?.tenantCountWithPending || 0} tenant{(rentSummary?.tenantCountWithPending || 0) !== 1 ? 's' : ''} with pending balance</p>
         </div>
-        <div className="relative overflow-hidden rounded-lg border-2 border-rose-200 bg-rose-50 p-4">
+        <div className="relative overflow-hidden rounded-lg border-2 border-rose-200 bg-rose-50 p-4 shadow-sm">
           <div className="flex items-start justify-between">
             <div>
               <p className="text-sm font-semibold text-rose-700">Pending Till Today</p>
