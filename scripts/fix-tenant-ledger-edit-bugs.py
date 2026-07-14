@@ -65,21 +65,26 @@ def main() -> None:
         APP_PATH.write_text(app)
 
         MIGRATION_PATH.write_text(
-            """-- Fix tenant-edit audit logging when activity_logs.user_role uses the app_role enum.\n"
-            "-- The cast remains validated by the enum input function, so invalid roles still fail.\n\n"
+            "-- Cast the tenant-edit audit role to the activity_logs app_role enum.\n"
+            "-- No tenant, payment, cashbook, invoice or ledger rows are changed here.\n\n"
             "do $$\n"
+            "declare\n"
+            "  v_definition text;\n"
+            "  v_signature regprocedure := 'public.edit_tenant_with_rent_adjustment(uuid,text,text,text,uuid,integer,date,numeric,numeric,text,numeric,date,text,text,text,numeric,date,boolean,boolean)'::regprocedure;\n"
+            "  v_old text := 'coalesce(v_actor_name, ''Admin''), lower(v_actor_role), ''Tenants'', ''Edit Tenant''';\n"
+            "  v_new text := 'coalesce(v_actor_name, ''Admin''), lower(v_actor_role)::public.app_role, ''Tenants'', ''Edit Tenant''';\n"
             "begin\n"
-            "  if not exists (\n"
-            "    select 1\n"
-            "    from pg_cast\n"
-            "    where castsource = 'text'::regtype\n"
-            "      and casttarget = 'public.app_role'::regtype\n"
-            "  ) then\n"
-            "    execute 'create cast (text as public.app_role) with inout as assignment';\n"
-            "  end if;\n"
+            "  select pg_get_functiondef(v_signature) into v_definition;\n\n"
+            "  if position(v_new in v_definition) > 0 then\n"
+            "    return;\n"
+            "  end if;\n\n"
+            "  if position(v_old in v_definition) = 0 then\n"
+            "    raise exception 'Expected tenant edit activity role expression was not found';\n"
+            "  end if;\n\n"
+            "  execute replace(v_definition, v_old, v_new);\n"
             "end\n"
-            "$$;\n"
-            """
+            "$$;\n\n"
+            "grant execute on function public.edit_tenant_with_rent_adjustment(uuid, text, text, text, uuid, integer, date, numeric, numeric, text, numeric, date, text, text, text, numeric, date, boolean, boolean) to authenticated;\n"
         )
 
         run("npm", "ci")
