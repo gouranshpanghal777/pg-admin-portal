@@ -4,10 +4,15 @@ import { supabase } from './supabase'
 
 const empty: AppData = { branches: [], users: [], tenants: [], rooms: [], payments: [], cashbook: [], expenses: [], inventory: [], purchases: [], tickets: [], invoices: [], activityLogs: [], obligations: [], securityLedger: [], advances: [], categories: [] }
 const num = (value: unknown) => Number(value || 0)
+const ACTIVITY_LOG_LIMIT = 1000
 
 export async function loadAppData(): Promise<AppData> {
   const tables = ['branches', 'profiles', 'staff_members', 'branch_assignments', 'staff_permissions', 'rooms', 'tenants', 'payments', 'cashbook_entries', 'expenses', 'inventory_items', 'inventory_purchases', 'maintenance_tickets', 'invoices', 'activity_logs', 'payment_obligations', 'security_ledger', 'tenant_advances', 'categories'] as const
-  const results = await Promise.all(tables.map((table) => supabase.from(table).select('*')))
+  const results = await Promise.all(tables.map((table) =>
+    table === 'activity_logs'
+      ? supabase.from(table).select('*').order('created_at', { ascending: false }).limit(ACTIVITY_LOG_LIMIT)
+      : supabase.from(table).select('*')
+  ))
   const failed = results.find((result) => result.error)
   if (failed?.error) throw failed.error
   const [branches, profiles, staff, assignments, permissions, rooms, tenants, payments, cashbook, expenses, inventory, purchases, tickets, invoices, logs, obligations, securityLedger, advances, categories] = results.map((result) => result.data || [])
@@ -34,7 +39,7 @@ export async function loadAppData(): Promise<AppData> {
 }
 
 export async function loadActivityLogs(): Promise<AppData['activityLogs']> {
-  const { data, error } = await supabase.from('activity_logs').select('*').order('created_at', { ascending: false })
+  const { data, error } = await supabase.from('activity_logs').select('*').order('created_at', { ascending: false }).limit(ACTIVITY_LOG_LIMIT)
   if (error) throw databaseError('select activity_logs', error)
   return (data || []).map((r) => ({ id: r.id, branchId: r.branch_id || '', branchName: r.branch_name, userId: r.user_id, userName: r.user_name, role: r.user_role === 'admin' ? 'Admin' : 'Staff', action: r.action_type, entity: r.module, module: r.module, actionType: r.action_type, description: r.description, metadata: r.metadata, at: r.created_at, oldValue: '', newValue: '' }))
 }
@@ -90,15 +95,21 @@ export async function persistAppData(before: AppData, after: AppData, userId: st
   for (const key of order) {
     const oldItems = (before as any)[key] || []
     const newItems = (after as any)[key] || []
-    const oldMap = new Map(oldItems.map((item: any) => [item.id, JSON.stringify(rows[key](item, userId))]))
-    const changed = newItems.filter((item: any) => oldMap.get(item.id) !== JSON.stringify(rows[key](item, userId)))
+    const serialize = rows[key] as (item: any, actorId: string) => Record<string, unknown>
+    const oldMap = new Map(oldItems.map((item: any) => [item.id, JSON.stringify(serialize(item, userId))]))
+    const changedRows: Record<string, unknown>[] = []
+    for (const item of newItems) {
+      const serialized = serialize(item, userId)
+      if (oldMap.get(item.id) !== JSON.stringify(serialized)) changedRows.push(serialized)
+    }
     const table = tableNames[key] || key
-    if (changed.length) await upsertWithRetry(table, changed.map((item: any) => rows[key](item, userId)))
+    if (changedRows.length) await upsertWithRetry(table, changedRows)
   }
   for (const key of [...order].reverse()) {
     const oldItems = (before as any)[key] || []
     const newItems = (after as any)[key] || []
-    const removed = oldItems.filter((item: any) => !newItems.some((next: any) => next.id === item.id)).map((item: any) => item.id)
+    const newIds = new Set(newItems.map((item: any) => item.id))
+    const removed = oldItems.filter((item: any) => !newIds.has(item.id)).map((item: any) => item.id)
     const table = tableNames[key] || key
     if (removed.length) await deleteWithRetry(table, removed)
   }
@@ -116,9 +127,11 @@ const AFFECTED_TABLES: Record<string, readonly string[]> = {
 export async function refreshTables(tables: readonly string[], currentData: AppData): Promise<AppData> {
   const entries = await Promise.all(
     tables.map(async (table) => {
-      const { data, error } = await supabase.from(table).select('*')
-      if (error) throw error
-      return [table, data || []] as const
+      const response = table === 'activity_logs'
+        ? await supabase.from(table).select('*').order('created_at', { ascending: false }).limit(ACTIVITY_LOG_LIMIT)
+        : await supabase.from(table).select('*')
+      if (response.error) throw response.error
+      return [table, response.data || []] as const
     })
   )
   const byTable = Object.fromEntries(entries)
@@ -219,6 +232,14 @@ async function repairFutureRoutedRentPayment(input: { tenantId: string; branchId
   if (paymentLookupError) throw databaseError('verify rent payment allocation', paymentLookupError)
   const payment = payments?.[0]
   if (!payment) return
+  if (payment.month === intendedPeriod) {
+    const { data: advanceRows, error: advanceLookupError } = await supabase.from('tenant_advances')
+      .select('id')
+      .eq('payment_id', payment.id)
+      .limit(1)
+    if (advanceLookupError) throw databaseError('check rent advance allocation', advanceLookupError)
+    if (!advanceRows?.length) return
+  }
 
   const [{ data: tenant, error: tenantError }, { data: obligations, error: obligationError }, { data: auth }] = await Promise.all([
     supabase.from('tenants').select('monthly_rent, due_date').eq('id', input.tenantId).eq('branch_id', input.branchId).single(),
@@ -241,24 +262,29 @@ async function repairFutureRoutedRentPayment(input: { tenantId: string; branchId
 
   let remaining = input.rentAmount
   let period = intendedPeriod
+  const allocationRows: Record<string, unknown>[] = []
   for (let index = 0; remaining > 0 && index < 120; index += 1, period = followingPeriod(period)) {
     const existing = obligationByPeriod.get(period)
     const agreed = Number(existing?.agreed_amount || tenant.monthly_rent)
     const received = Number(existing?.received_amount || 0)
     const advanceApplied = Number(existing?.advance_applied || 0)
     const applied = Math.min(remaining, Math.max(0, agreed - received - advanceApplied))
+    if (applied <= 0) continue
     const nextReceived = received + applied
     const row = {
       id: existing?.id || crypto.randomUUID(), branch_id: input.branchId, tenant_id: input.tenantId,
       period, payment_type: 'rent', agreed_amount: agreed, received_amount: nextReceived,
       advance_applied: advanceApplied, due_date: existing?.due_date || dueDateFor(period),
-      status: nextReceived + advanceApplied >= agreed ? 'Paid' : nextReceived + advanceApplied > 0 ? 'Partial' : 'Pending',
+      status: nextReceived + advanceApplied >= agreed ? 'Paid' : 'Partial',
       created_by: existing?.created_by || auth.user?.id,
     }
-    const { error: allocationError } = await supabase.from('payment_obligations').upsert(row)
-    if (allocationError) throw databaseError('allocate rent across monthly obligations', allocationError)
+    allocationRows.push(row)
     obligationByPeriod.set(period, row)
     remaining -= applied
+  }
+  if (allocationRows.length) {
+    const { error: allocationError } = await supabase.from('payment_obligations').upsert(allocationRows)
+    if (allocationError) throw databaseError('allocate rent across monthly obligations', allocationError)
   }
 }
 
@@ -366,8 +392,6 @@ async function rebuildTenantRentObligations(tenantId: string) {
   }
   const { error: rebuildError } = await supabase.from('payment_obligations').upsert(rows)
   if (rebuildError) throw databaseError('rebuild rent obligations after delete', rebuildError)
-  const { error: normalizeError } = await supabase.from('payment_obligations').upsert(rows.map((row) => ({ ...row, advance_applied: 0 })))
-  if (normalizeError) throw databaseError('normalize rebuilt rent obligations', normalizeError)
   const currentRentReceived = (payments || []).filter((payment) => payment.payment_date?.slice(0, 7) === currentPeriod).reduce((sum, payment) => sum + Number(payment.amount || 0), 0)
   await supabase.from('tenants').update({ paid_this_month: currentRentReceived }).eq('id', tenantId)
 }

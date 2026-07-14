@@ -334,17 +334,23 @@ const periodsBetween = (start: string, end: string) => {
   return periods
 }
 function getRentLedgerState(tenant: Tenant, payments: Payment[], obligations: PaymentObligation[] = []) {
-  const rentObligations = obligations.filter((item) => item.tenantId === tenant.id && item.paymentType === 'Rent')
+  const rentObligations = new Map<string, PaymentObligation>()
+  for (const item of obligations) if (item.tenantId === tenant.id && item.paymentType === 'Rent') rentObligations.set(item.period, item)
+  const rentPayments = new Map<string, number>()
+  for (const payment of payments) {
+    if (payment.tenantId !== tenant.id || payment.paymentType !== 'Rent') continue
+    rentPayments.set(payment.month, (rentPayments.get(payment.month) || 0) + payment.amount)
+  }
   const currentStay = tenant.rejoins?.at(-1)
   const cycleStartDate = currentStay?.rejoinDate || tenant.joiningDate
   const dueAnchor = currentStay?.dueDate || tenant.dueDate || cycleStartDate
   const joiningMonth = cycleStartDate.slice(0, 7)
-  const importedPaidMonths = importedRentPaidMonths[tenant.name.trim().toUpperCase()] || []
+  const importedPaidMonths = new Set(importedRentPaidMonths[tenant.name.trim().toUpperCase()] || [])
   for (const period of periodsBetween(joiningMonth, currentMonth)) {
-    const obligation = rentObligations.find((item) => item.period === period)
-    const recordedPayments = payments.filter((payment) => payment.tenantId === tenant.id && payment.paymentType === 'Rent' && payment.month === period).reduce((sum, payment) => sum + payment.amount, 0)
+    const obligation = rentObligations.get(period)
+    const recordedPayments = rentPayments.get(period) || 0
     const agreed = obligation?.agreed ?? tenant.monthlyRent
-    const received = Math.max(obligation?.received ?? 0, recordedPayments, importedPaidMonths.includes(period) ? agreed : 0)
+    const received = Math.max(obligation?.received ?? 0, recordedPayments, importedPaidMonths.has(period) ? agreed : 0)
     const advanceApplied = obligation?.advanceApplied ?? 0
     const pending = Math.max(0, agreed - received - advanceApplied)
     if (pending > 0) {
@@ -371,9 +377,9 @@ function logActivity(data: AppData, input: { userName: string; userId: string; u
   const log: ActivityLog = {
     id: uid('log'), branchId: input.branchId, branchName: input.branchName, userId: input.userId, role: input.userRole,
     action: input.actionType, entity: input.module, module: input.module, actionType: input.actionType, userName: input.userName,
-    description: input.description, metadata: input.metadata, at: '', oldValue: '', newValue: '',
+    description: input.description, metadata: input.metadata, at: new Date().toISOString(), oldValue: '', newValue: '',
   }
-  return { ...data, activityLogs: [log, ...data.activityLogs] }
+  return { ...data, activityLogs: [log, ...data.activityLogs].slice(0, 1000) }
 }
 
 
@@ -417,7 +423,19 @@ function branchData(data: AppData, branchId: string) {
   const closingBalance = openingBalance + netMovement
   const cashBalance = cashbook.reduce((sum, entry) => sum + (entry.type === 'Credit' ? entry.amount : -entry.amount), 0)
   const expected = activeTenants.reduce((sum, tenant) => sum + getTenantDue(tenant), 0)
-  const rentStates = new Map(activeTenants.map((tenant) => [tenant.id, getRentLedgerState(tenant, payments, obligations)]))
+  const paymentsByTenant = new Map<string, Payment[]>()
+  for (const payment of payments) {
+    const tenantPayments = paymentsByTenant.get(payment.tenantId)
+    if (tenantPayments) tenantPayments.push(payment)
+    else paymentsByTenant.set(payment.tenantId, [payment])
+  }
+  const obligationsByTenant = new Map<string, PaymentObligation[]>()
+  for (const obligation of obligations) {
+    const tenantObligations = obligationsByTenant.get(obligation.tenantId)
+    if (tenantObligations) tenantObligations.push(obligation)
+    else obligationsByTenant.set(obligation.tenantId, [obligation])
+  }
+  const rentStates = new Map(activeTenants.map((tenant) => [tenant.id, getRentLedgerState(tenant, paymentsByTenant.get(tenant.id) || [], obligationsByTenant.get(tenant.id) || [])]))
   const overdue = activeTenants.reduce((sum, tenant) => rentStates.get(tenant.id)?.status === 'Overdue' ? sum + (rentStates.get(tenant.id)?.pending || 0) : sum, 0)
   const pending = activeTenants.reduce((sum, tenant) => {
     const state = rentStates.get(tenant.id)
@@ -601,7 +619,7 @@ function App() {
   useEffect(() => {
     if (!session) { setData(emptyAppData()); return }
     setDataLoading(true); setBackendError('')
-    loadAppData().then(async (next) => { const profile = next.users.find((user) => user.id === session.user.id); if (profile) setRole(profile.role); const loginBranch = next.branches.find((item) => profile?.role === 'Admin' || profile?.branchIds.includes(item.id)); const loginKey = `pg95-login:${session.user.id}`; const shouldLogLogin = sessionStorage.getItem(loginKey) !== '1'; const logged = profile && loginBranch && shouldLogLogin ? logActivity(next, { userName: profile.name, userId: profile.id, userRole: profile.role, branchId: loginBranch.id, branchName: loginBranch.name, module: 'Authentication', actionType: 'Login', description: `${profile.role} ${profile.name} logged in.` }) : next; dataRef.current = logged; setData(logged); if (logged !== next) { await persistAppData(next, logged, session.user.id); try { const refreshedLogs = await loadActivityLogs(); const refreshed = { ...logged, activityLogs: refreshedLogs }; dataRef.current = refreshed; setData(refreshed) } catch {}; sessionStorage.setItem(loginKey, '1') }; const cleanupKey = 'pg95-last-cleanup'; const lastCleanup = localStorage.getItem(cleanupKey); const todayStr = new Date().toISOString().slice(0, 10); if (lastCleanup !== todayStr) { cleanupOldActivityLogs().catch(() => {}); localStorage.setItem(cleanupKey, todayStr) } }).catch((error) => setBackendError(error instanceof Error ? error.message : 'Unable to load Supabase data')).finally(() => setDataLoading(false))
+    loadAppData().then(async (next) => { const profile = next.users.find((user) => user.id === session.user.id); if (profile) setRole(profile.role); const loginBranch = next.branches.find((item) => profile?.role === 'Admin' || profile?.branchIds.includes(item.id)); const loginKey = `pg95-login:${session.user.id}`; const shouldLogLogin = sessionStorage.getItem(loginKey) !== '1'; const logged = profile && loginBranch && shouldLogLogin ? logActivity(next, { userName: profile.name, userId: profile.id, userRole: profile.role, branchId: loginBranch.id, branchName: loginBranch.name, module: 'Authentication', actionType: 'Login', description: `${profile.role} ${profile.name} logged in.` }) : next; dataRef.current = logged; setData(logged); if (logged !== next) { await persistAppData(next, logged, session.user.id); sessionStorage.setItem(loginKey, '1') }; const cleanupKey = 'pg95-last-cleanup'; const lastCleanup = localStorage.getItem(cleanupKey); const todayStr = new Date().toISOString().slice(0, 10); if (lastCleanup !== todayStr) { cleanupOldActivityLogs().catch(() => {}); localStorage.setItem(cleanupKey, todayStr) } }).catch((error) => setBackendError(error instanceof Error ? error.message : 'Unable to load Supabase data')).finally(() => setDataLoading(false))
   }, [session])
 
   useEffect(() => {
@@ -647,14 +665,19 @@ function App() {
     return () => window.removeEventListener('popstate', handlePopState)
   }, [])
 
-  const refreshRoomStatuses = (next: AppData): AppData => ({
-    ...next,
-    rooms: next.rooms.map((room) => {
-      if (room.status === 'Maintenance') return room
-      const activeCount = next.tenants.filter((tenant) => tenant.roomId === room.id && tenant.status !== 'Left').length
-      return { ...room, status: activeCount >= room.beds ? 'Occupied' : 'Vacant' }
-    }),
-  })
+  const refreshRoomStatuses = (next: AppData): AppData => {
+    const occupiedByRoom = new Map<string, number>()
+    for (const tenant of next.tenants) {
+      if (tenant.status === 'Left') continue
+      occupiedByRoom.set(tenant.roomId, (occupiedByRoom.get(tenant.roomId) || 0) + 1)
+    }
+    return {
+      ...next,
+      rooms: next.rooms.map((room) => room.status === 'Maintenance'
+        ? room
+        : { ...room, status: (occupiedByRoom.get(room.id) || 0) >= room.beds ? 'Occupied' : 'Vacant' }),
+    }
+  }
 
   const updateData = (updater: (previous: AppData) => AppData, action: string, entity: string, description?: string, metadata?: Record<string, string | number>) => {
     if (!isAdmin && /^(edit|delete)/i.test(action)) return
@@ -664,13 +687,7 @@ function App() {
     dataRef.current = logged
     setData(logged)
     persistenceQueue.current = persistenceQueue.current
-      .then(async () => {
-        await persistAppData(previous, logged, currentUser.id)
-        const refreshedLogs = await loadActivityLogs()
-        const refreshed = { ...logged, activityLogs: refreshedLogs }
-        dataRef.current = refreshed
-        setData(refreshed)
-      })
+      .then(() => persistAppData(previous, logged, currentUser.id))
       .catch(async (error) => {
         const message = error instanceof Error ? error.message : 'Unable to save. Please try again.'
         console.error('updateData persistence failed:', error)
@@ -686,13 +703,7 @@ function App() {
     dataRef.current = next
     setData(next)
     persistenceQueue.current = persistenceQueue.current
-      .then(async () => {
-        await persistAppData(previous, next, currentUser.id)
-        const refreshedLogs = await loadActivityLogs()
-        const refreshed = { ...next, activityLogs: refreshedLogs }
-        dataRef.current = refreshed
-        setData(refreshed)
-      })
+      .then(() => persistAppData(previous, next, currentUser.id))
       .catch(async (error) => {
         setBackendError(error instanceof Error ? error.message : 'Unable to add branch. Please try again.')
         try { const refreshed = await loadAppData(); dataRef.current = refreshed; setData(refreshed) } catch { /* Keep the optimistic state when reconciliation is unavailable. */ }
@@ -860,7 +871,7 @@ function App() {
           {page === 'Finance' && <FinancePage scoped={scoped} financeTab={financeTab} setFinanceTab={setFinanceTab} data={data} branch={branch} setModal={openModal} setSelectedTenantId={setSelectedTenantId} setSelectedCashbookId={setSelectedCashbookId} updateData={updateData} role={role} currentUser={currentUser} isAdmin={isAdmin} />}
           {page === 'Inventory' && <InventoryPage scoped={scoped} filter={inventoryFilter} setFilter={setInventoryFilter} setModal={openModal} setSelectedInventoryId={setSelectedInventoryId} canAdd={can('add_inventory')} />}
           {page === 'Maintenance' && <MaintenancePage data={data} scoped={scoped} filter={ticketFilter} setFilter={setTicketFilter} setModal={openModal} setSelectedTicketId={setSelectedTicketId} canResolve={can('resolve_maintenance')} canCreate={can('create_maintenance')} branch={branch} />}
-          {page === 'Reports' && <ReportsPage scoped={scoped} data={data} branch={branch} reportRange={reportRange} setReportRange={setReportRange} onExport={(type, format) => { const previous = dataRef.current; const logged = logActivity(previous, { userName: currentUser.name, userId: currentUser.id, userRole: role, branchId, branchName: branch?.name || '', module: 'Report', actionType: 'Export', description: `${role} ${currentUser.name} exported ${type} as ${format} for ${branch?.name}.` }); dataRef.current = logged; setData(logged); persistenceQueue.current = persistenceQueue.current.then(async () => { await persistAppData(previous, logged, currentUser.id); try { const refreshedLogs = await loadActivityLogs(); const refreshed = { ...logged, activityLogs: refreshedLogs }; dataRef.current = refreshed; setData(refreshed) } catch {} }).catch(() => {}) }} />}
+          {page === 'Reports' && <ReportsPage scoped={scoped} data={data} branch={branch} reportRange={reportRange} setReportRange={setReportRange} onExport={(type, format) => { const previous = dataRef.current; const logged = logActivity(previous, { userName: currentUser.name, userId: currentUser.id, userRole: role, branchId, branchName: branch?.name || '', module: 'Report', actionType: 'Export', description: `${role} ${currentUser.name} exported ${type} as ${format} for ${branch?.name}.` }); dataRef.current = logged; setData(logged); persistenceQueue.current = persistenceQueue.current.then(() => persistAppData(previous, logged, currentUser.id)).catch(() => {}) }} />}
           {page === 'Settings' && isAdmin && <SettingsPage data={data} branch={branch} role={role} isAdmin={isAdmin} setModal={openModal} setSelectedUserId={setSelectedUserId} onDeactivateUser={async (user) => { try { await deactivateStaffAccount(user.id); const refreshed = await loadAppData(); const next = logActivity(refreshed, { userName: currentUser.name, userId: currentUser.id, userRole: role, branchId, branchName: branch.name, module: 'Staff', actionType: 'Deactivate Staff', description: `${role} ${currentUser.name} deactivated staff ${user.name}.` }); await persistAppData(refreshed, next, currentUser.id); const refreshedLogs = await loadActivityLogs(); setData({ ...next, activityLogs: refreshedLogs }) } catch (error) { setBackendError(error instanceof Error ? error.message : 'Unable to deactivate staff') } }} onReactivateUser={async (user) => { try { await reactivateUserAccount(user.id); const refreshed = await loadAppData(); const next = logActivity(refreshed, { userName: currentUser.name, userId: currentUser.id, userRole: role, branchId, branchName: branch.name, module: 'Staff', actionType: 'Reactivate Staff', description: `${role} ${currentUser.name} reactivated ${user.name}.` }); await persistAppData(refreshed, next, currentUser.id); const refreshedLogs = await loadActivityLogs(); setData({ ...next, activityLogs: refreshedLogs }) } catch (error) { setBackendError(error instanceof Error ? error.message : 'Unable to reactivate user') } }} onResetPassword={async (userId) => { setSelectedUserId(userId); openModal('resetPassword') }} onToggleBranch={(item, active) => updateData((previous) => ({ ...previous, branches: previous.branches.map((candidate) => candidate.id === item.id ? { ...candidate, active } : candidate) }), active ? 'Reactivate Branch' : 'Deactivate Branch', 'Branches', `${role} ${currentUser.name} ${active ? 'reactivated' : 'deactivated'} branch ${item.name}.`)} />}
         </main>
       </div>
@@ -961,7 +972,7 @@ function App() {
         try { await deleteCashbookEntryCascade(selectedCashbookId); const refreshedCashbook = await refreshTables(getAffectedTables('delete_cashbook'), dataRef.current); dataRef.current = refreshedCashbook; setData(refreshedCashbook) }
         catch (error) { const message = error instanceof Error ? error.message : 'Cashbook deletion failed'; setBackendError(message); throw error }
       }} />}
-      {modal === 'fiveMonthRegister' && <FiveMonthRegisterModal data={data} scoped={scoped} branch={branch} visibleBranches={visibleBranches} onClose={closeModal} onExport={(type, format) => { const previous = dataRef.current; const logged = logActivity(previous, { userName: currentUser.name, userId: currentUser.id, userRole: role, branchId, branchName: branch?.name || '', module: 'Report', actionType: 'Export', description: `${role} ${currentUser.name} exported ${type} as ${format} for ${branch?.name}.` }); dataRef.current = logged; setData(logged); persistenceQueue.current = persistenceQueue.current.then(async () => { await persistAppData(previous, logged, currentUser.id); try { const refreshedLogs = await loadActivityLogs(); const refreshed = { ...logged, activityLogs: refreshedLogs }; dataRef.current = refreshed; setData(refreshed) } catch {} }).catch(() => {}) }} />}
+      {modal === 'fiveMonthRegister' && <FiveMonthRegisterModal data={data} scoped={scoped} branch={branch} visibleBranches={visibleBranches} onClose={closeModal} onExport={(type, format) => { const previous = dataRef.current; const logged = logActivity(previous, { userName: currentUser.name, userId: currentUser.id, userRole: role, branchId, branchName: branch?.name || '', module: 'Report', actionType: 'Export', description: `${role} ${currentUser.name} exported ${type} as ${format} for ${branch?.name}.` }); dataRef.current = logged; setData(logged); persistenceQueue.current = persistenceQueue.current.then(() => persistAppData(previous, logged, currentUser.id)).catch(() => {}) }} />}
       {modal === 'notifications' && <Modal title="Notifications" onClose={closeModal}>{notifications.length ? <div className="grid gap-2">{notifications.map((note) => <div key={note} className="rounded-md bg-orange-50 p-3 text-sm font-semibold text-orange-800">{note}</div>)}</div> : <p>No active alerts.</p>}</Modal>}
     </div>
   )
