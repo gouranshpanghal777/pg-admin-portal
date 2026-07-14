@@ -346,7 +346,11 @@ function getRentLedgerState(tenant: Tenant, payments: Payment[], obligations: Pa
   const dueAnchor = tenant.dueDate || currentStay?.dueDate || cycleStartDate
   const joiningMonth = cycleStartDate.slice(0, 7)
   const importedPaidMonths = new Set(importedRentPaidMonths[tenant.name.trim().toUpperCase()] || [])
-  for (const period of periodsBetween(joiningMonth, currentMonth)) {
+  const trackedPeriods = [...new Set([
+    ...periodsBetween(joiningMonth, currentMonth),
+    ...[...rentObligations.keys()].filter((period) => period >= joiningMonth),
+  ])].sort()
+  for (const period of trackedPeriods) {
     const obligation = rentObligations.get(period)
     const recordedPayments = rentPayments.get(period) || 0
     const agreed = obligation?.agreed ?? tenant.monthlyRent
@@ -361,9 +365,11 @@ function getRentLedgerState(tenant: Tenant, payments: Payment[], obligations: Pa
       return { period, paidThroughMonth: period === joiningMonth ? '-' : periodsBetween(joiningMonth, period).slice(-2, -1)[0] || '-', dueDate, agreed, received, advanceApplied, pending, status }
     }
   }
-  const period = nextPeriod(currentMonth)
+  const latestTrackedPeriod = trackedPeriods.at(-1) || currentMonth
+  const lastCoveredPeriod = latestTrackedPeriod > currentMonth ? latestTrackedPeriod : currentMonth
+  const period = nextPeriod(lastCoveredPeriod)
   const dueDate = rentDueDateForPeriod(dueAnchor, period)
-  return { period, paidThroughMonth: currentMonth, dueDate, agreed: tenant.monthlyRent, received: 0, advanceApplied: 0, pending: 0, status: (daysUntil(dueDate) <= 3 ? 'Upcoming' : 'Clear') as RentLedgerStatus }
+  return { period, paidThroughMonth: lastCoveredPeriod, dueDate, agreed: tenant.monthlyRent, received: 0, advanceApplied: 0, pending: 0, status: (daysUntil(dueDate) <= 3 ? 'Upcoming' : 'Clear') as RentLedgerStatus }
 }
 
 function getCalculatedRentDueDate(tenant: Tenant, payments: Payment[], obligations: PaymentObligation[] = []) {
