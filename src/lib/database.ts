@@ -169,7 +169,7 @@ const friendlyDbError = (error: { message?: string; code?: string }): string => 
   if (code === '23503') return 'This record is referenced by other data and cannot be modified.'
   if (code === '22003') return 'The amount entered is invalid.'
   if (code === 'P0002') return 'The requested record was not found.'
-  if (/failed to fetch|networkerror|aborterror/i.test(error.message || '')) return 'The entry could not be confirmed. Please check your connection and try again.'
+  if (/failed to fetch|load failed|networkerror|aborterror/i.test(error.message || '')) return 'The entry could not be confirmed. Please check your connection and try again.'
   return error.message || 'Unable to save. Please try again.'
 }
 
@@ -194,7 +194,7 @@ export async function recordSplitPayment(input: { requestId: string; tenantId: s
     p_description: input.description || null,
   }
   let response = await supabase.rpc('record_split_payment_v2', payload)
-  if (response.error && !response.error.code && /failed to fetch|networkerror/i.test(response.error.message || '')) {
+  if (response.error && isTransientNetworkError(response.error)) {
     await new Promise((resolve) => window.setTimeout(resolve, 400))
     response = await supabase.rpc('record_split_payment_v2', payload)
   }
@@ -262,6 +262,11 @@ async function repairFutureRoutedRentPayment(input: { tenantId: string; branchId
   }
 }
 
+async function verifyAdmission(requestId: string): Promise<string | null> {
+  const { data } = await supabase.from('admission_requests').select('tenant_id').eq('request_id', requestId).maybeSingle()
+  return data?.tenant_id || null
+}
+
 export async function admitTenant(input: { requestId: string; branchId: string; name: string; phone: string; email: string; roomId: string; bedNo: number; joiningDate: string; dueDate: string; monthlyRent: number; security: number; electricity: string; electricityAmount: number; idProof: string }) {
   const payload = {
     p_request_id: input.requestId, p_branch_id: input.branchId, p_name: input.name,
@@ -271,14 +276,21 @@ export async function admitTenant(input: { requestId: string; branchId: string; 
     p_electricity: input.electricity, p_electricity_amount: input.electricityAmount,
     p_id_proof: input.idProof || '',
   }
-  let response = await supabase.rpc('admit_tenant_v2', payload)
-  if (response.error && !response.error.code && /failed to fetch|networkerror/i.test(response.error.message || '')) {
-    await new Promise((resolve) => window.setTimeout(resolve, 400))
-    response = await supabase.rpc('admit_tenant_v2', payload)
+  const maxAttempts = 3
+  let lastError: unknown = null
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const response = await supabase.rpc('admit_tenant_v2', payload)
+    if (!response.error) return response.data as string
+    if (isTransientNetworkError(response.error)) {
+      lastError = response.error
+      if (attempt < maxAttempts) await new Promise((resolve) => window.setTimeout(resolve, 400 * attempt))
+      continue
+    }
+    throw databaseError('admit_tenant_v2 RPC', response.error)
   }
-  const { data, error } = response
-  if (error) throw databaseError('admit_tenant_v2 RPC', error)
-  return data as string
+  const verified = await verifyAdmission(input.requestId)
+  if (verified) return verified
+  throw databaseError('admit_tenant_v2 RPC', lastError as { message?: string; code?: string })
 }
 
 export async function updateUnsettledTenantRent(tenantId: string, monthlyRent: number) {
@@ -468,4 +480,35 @@ export async function swapTenantRooms(
   })
   if (error) throw databaseError('swap_tenant_rooms RPC', error)
   return data as { success: boolean; error?: string }
+}
+
+export type RentCollectionSummary = {
+  expectedTillMonthEnd: number
+  pendingTillToday: number
+  previousMonthsPending: number
+  currentMonthTotalOutstanding: number
+  currentMonthDueTillToday: number
+  currentMonthNotYetDue: number
+  tenantCountWithPending: number
+  calculatedAt: string
+}
+
+export async function getBranchRentCollectionSummary(branchId: string): Promise<RentCollectionSummary> {
+  const todayStr = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Kolkata' })
+  const { data, error } = await supabase.rpc('get_branch_rent_collection_summary', {
+    p_branch_id: branchId,
+    p_as_of_date: todayStr,
+  })
+  if (error) throw databaseError('get_branch_rent_collection_summary', error)
+  const row = data as Record<string, unknown>
+  return {
+    expectedTillMonthEnd: num(row.expected_till_month_end),
+    pendingTillToday: num(row.pending_till_today),
+    previousMonthsPending: num(row.previous_months_pending),
+    currentMonthTotalOutstanding: num(row.current_month_total_outstanding),
+    currentMonthDueTillToday: num(row.current_month_due_till_today),
+    currentMonthNotYetDue: num(row.current_month_not_yet_due),
+    tenantCountWithPending: num(row.tenant_count_with_pending),
+    calculatedAt: String(row.calculated_at || ''),
+  }
 }

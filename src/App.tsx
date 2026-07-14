@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase, supabaseConfigured } from './lib/supabase'
-import { admitTenant, cleanupOldActivityLogs, createStaffAccount, deactivateStaffAccount, deleteBranchCascade, deleteCashbookEntryCascade, deleteTenantWithPayments, getAffectedTables, loadAppData, loadActivityLogs, persistAppData, reactivateUserAccount, recordSplitPayment, refreshTables, resetUserPassword, swapTenantRooms, undoVacateTenant, updateUnsettledTenantRent, vacateTenantErp } from './lib/database'
+import { admitTenant, cleanupOldActivityLogs, createStaffAccount, deactivateStaffAccount, deleteBranchCascade, deleteCashbookEntryCascade, deleteTenantWithPayments, getAffectedTables, getBranchRentCollectionSummary, loadAppData, loadActivityLogs, persistAppData, reactivateUserAccount, recordSplitPayment, refreshTables, resetUserPassword, swapTenantRooms, undoVacateTenant, updateUnsettledTenantRent, vacateTenantErp } from './lib/database'
+import type { RentCollectionSummary } from './lib/database'
 import { importedRentPaidMonths } from './data/farukhnagarRentRegister'
 import {
   AlertTriangle,
@@ -31,6 +32,7 @@ import {
   Printer,
   QrCode,
   ReceiptText,
+  RefreshCw,
   Search,
   Settings,
   ShieldCheck,
@@ -558,6 +560,7 @@ function App() {
   const [inventoryFilter, setInventoryFilter] = useState('All')
   const [ticketFilter, setTicketFilter] = useState('All')
   const [reportRange, setReportRange] = useState('Monthly Summary')
+  const [rentSummary, setRentSummary] = useState<RentCollectionSummary | null>(null)
   const persistenceQueue = useRef(Promise.resolve())
   const dataRef = useRef(data)
   const isPopStateRef = useRef(false)
@@ -606,6 +609,13 @@ function App() {
   }, [branchId, currentUser.branchIds, isAdmin])
 
   useEffect(() => { dataRef.current = data }, [data])
+
+  const refreshRentSummary = useCallback(() => {
+    if (!branchId) { setRentSummary(null); return }
+    getBranchRentCollectionSummary(branchId).then(setRentSummary).catch(() => setRentSummary(null))
+  }, [branchId])
+
+  useEffect(() => { refreshRentSummary() }, [refreshRentSummary])
 
   useEffect(() => {
     if (!initializedRef.current) {
@@ -843,7 +853,7 @@ function App() {
         <main className="p-3 lg:p-6" style={{ minHeight: 'calc(100dvh - 3.5rem - env(safe-area-inset-top, 0px))' }}>
           {successMessage && <div className="mb-4 flex items-center justify-between gap-3 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700"><span>{successMessage}</span><button aria-label="Dismiss" onClick={() => setSuccessMessage('')}><X size={16} /></button></div>}
           {backendError && <div className="mb-4 flex items-center justify-between gap-3 rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700"><span>{backendError}</span><button aria-label="Dismiss error" onClick={() => setBackendError('')}><X size={16} /></button></div>}
-          {page === 'Dashboard' && <Dashboard scoped={scoped} setModal={openModal} setPage={setPage} setTenantTab={setTenantTab} setTenantFilter={setTenantFilter} setRoomFloor={setRoomFloor} setFinanceTab={setFinanceTab} setPaymentFilter={setPaymentFilter} setTicketFilter={setTicketFilter} />}
+          {page === 'Dashboard' && <Dashboard scoped={scoped} rentSummary={rentSummary} refreshRentSummary={refreshRentSummary} setModal={openModal} setPage={setPage} setTenantTab={setTenantTab} setTenantFilter={setTenantFilter} setRoomFloor={setRoomFloor} setFinanceTab={setFinanceTab} setPaymentFilter={setPaymentFilter} setTicketFilter={setTicketFilter} />}
           {page === 'Tenants' && <TenantsPage key={branch?.id} data={data} scoped={scoped} tenantTab={tenantTab} setTenantTab={setTenantTab} filter={tenantFilter} setFilter={setTenantFilter} setModal={openModal} setSelectedTenantId={setSelectedTenantId} isAdmin={isAdmin} canAction={can} />}
           {page === 'Rooms' && <RoomsPage scoped={scoped} roomFloor={roomFloor} setRoomFloor={setRoomFloor} setSelectedRoomId={setSelectedRoomId} setModal={openModal} isAdmin={isAdmin} />}
           {page === 'Payments' && <PaymentsPage data={data} scoped={scoped} filter={paymentFilter} setFilter={setPaymentFilter} setModal={openModal} setSelectedTenantId={setSelectedTenantId} canAdd={can('add_payment')} />}
@@ -876,8 +886,14 @@ function App() {
               description: `Admission payment - ${tenant.name}`,
             })
           }
-          const refreshedTenants = await refreshTables(getAffectedTables('admit'), dataRef.current)
-          dataRef.current = refreshedTenants; setData(refreshedTenants)
+          setSuccessMessage('Tenant admitted successfully.')
+          refreshRentSummary()
+          try {
+            const refreshedTenants = await refreshTables(getAffectedTables('admit'), dataRef.current)
+            dataRef.current = refreshedTenants; setData(refreshedTenants)
+          } catch {
+            try { const full = await loadAppData(); dataRef.current = full; setData(full) } catch {}
+          }
         }
         catch (error) { const message = error instanceof Error ? error.message : 'Tenant admission failed'; setBackendError(message); throw error }
       }} />}
@@ -903,6 +919,7 @@ function App() {
           await recordSplitPayment({ ...payment, branchId })
           const refreshedPayments = await refreshTables(getAffectedTables('payment'), dataRef.current)
           dataRef.current = refreshedPayments; setData(refreshedPayments)
+          refreshRentSummary()
         } catch (error) {
           const message = error instanceof Error ? error.message : 'Payment could not be saved.'
           console.error('Payment save failed:', error)
@@ -911,9 +928,9 @@ function App() {
         }
       }} />}
       {modal === 'notice' && <NoticeModal onClose={closeModal} onSubmit={(notice) => { const tenant = data.tenants.find((item) => item.id === selectedTenantId)!; updateData((previous) => ({ ...previous, tenants: previous.tenants.map((item) => item.id === selectedTenantId ? { ...item, status: 'Notice', notice } : item) }), 'Issue Tenant Notice', 'Tenants', `${role} ${currentUser.name} issued vacating notice to ${tenant.name} in Room ${data.rooms.find((room) => room.id === tenant.roomId)?.number}. Notice details: ${notice}.`) }} />}
-      {modal === 'vacate' && (() => { const tenant = data.tenants.find((item) => item.id === selectedTenantId)!; const rentState = scoped.rentStates.get(tenant.id) || rentLedgerState(tenant, scoped.obligations, scoped.payments); return <VacateModal tenant={tenant} dueDate={rentState.dueDate} alreadyReceived={rentState.received} onClose={closeModal} onSubmit={async (left, settlementRequestId) => { setBackendError(''); try { if ((left.settlementReceived || 0) > 0) await recordSplitPayment({ requestId: settlementRequestId, tenantId: tenant.id, branchId, rentAmount: left.settlementReceived || 0, securityAmount: 0, electricityAmount: 0, otherAmount: 0, paymentDate: left.leftDate, rentPeriod: rentState.period, paymentMode: 'Cash', description: `Vacate settlement - ${tenant.name}` }); await vacateTenantErp(selectedTenantId, left); const refreshedVacate = await refreshTables(getAffectedTables('vacate'), dataRef.current); dataRef.current = refreshedVacate; setData(refreshedVacate) } catch (error) { setBackendError(error instanceof Error ? error.message : 'Unable to vacate tenant'); throw error } }} /> })()}
-      {modal === 'confirmUndoVacate' && <ConfirmModal title="Undo tenant vacate" message="Restore this tenant to the original room and reverse any security refund or deduction created during vacating? Payment history will remain unchanged." confirmLabel="Undo Vacate" onClose={closeModal} onConfirm={async () => { setBackendError(''); try { await undoVacateTenant(selectedTenantId); const refreshedUndo = await refreshTables(getAffectedTables('vacate'), dataRef.current); dataRef.current = refreshedUndo; setData(refreshedUndo) } catch (error) { const message = error instanceof Error ? error.message : 'Unable to undo tenant vacate'; setBackendError(message); throw error } }} />}
-      {modal === 'editTenant' && <EditTenantModal tenant={data.tenants.find((tenant) => tenant.id === selectedTenantId)!} rooms={scoped.rooms} tenants={scoped.activeTenants} onClose={closeModal} onSubmit={(changes) => { const tenant = data.tenants.find((item) => item.id === selectedTenantId)!; const { applyRentToPending, ...tenantChanges } = changes; updateData((previous) => ({ ...previous, tenants: previous.tenants.map((item) => item.id === selectedTenantId ? { ...item, ...tenantChanges } : item) }), 'Edit Tenant', 'Tenants', `${role} ${currentUser.name} edited tenant ${tenant.name} details. Changed room from ${data.rooms.find((room) => room.id === tenant.roomId)?.number} to ${data.rooms.find((room) => room.id === changes.roomId)?.number}, rent from ${money(tenant.monthlyRent)} to ${money(changes.monthlyRent || 0)}.`); if (applyRentToPending && changes.monthlyRent !== undefined) { persistenceQueue.current = persistenceQueue.current.then(async () => { await updateUnsettledTenantRent(tenant.id, changes.monthlyRent!); const refreshed = await loadAppData(); dataRef.current = refreshed; setData(refreshed) }).catch((error) => setBackendError(error instanceof Error ? error.message : 'Unable to update rent obligations')) } }} />}
+      {modal === 'vacate' && (() => { const tenant = data.tenants.find((item) => item.id === selectedTenantId)!; const rentState = scoped.rentStates.get(tenant.id) || rentLedgerState(tenant, scoped.obligations, scoped.payments); return <VacateModal tenant={tenant} dueDate={rentState.dueDate} alreadyReceived={rentState.received} onClose={closeModal} onSubmit={async (left, settlementRequestId) => { setBackendError(''); try { if ((left.settlementReceived || 0) > 0) await recordSplitPayment({ requestId: settlementRequestId, tenantId: tenant.id, branchId, rentAmount: left.settlementReceived || 0, securityAmount: 0, electricityAmount: 0, otherAmount: 0, paymentDate: left.leftDate, rentPeriod: rentState.period, paymentMode: 'Cash', description: `Vacate settlement - ${tenant.name}` }); await vacateTenantErp(selectedTenantId, left); const refreshedVacate = await refreshTables(getAffectedTables('vacate'), dataRef.current); dataRef.current = refreshedVacate; setData(refreshedVacate); refreshRentSummary() } catch (error) { setBackendError(error instanceof Error ? error.message : 'Unable to vacate tenant'); throw error } }} /> })()}
+      {modal === 'confirmUndoVacate' && <ConfirmModal title="Undo tenant vacate" message="Restore this tenant to the original room and reverse any security refund or deduction created during vacating? Payment history will remain unchanged." confirmLabel="Undo Vacate" onClose={closeModal} onConfirm={async () => { setBackendError(''); try { await undoVacateTenant(selectedTenantId); const refreshedUndo = await refreshTables(getAffectedTables('vacate'), dataRef.current); dataRef.current = refreshedUndo; setData(refreshedUndo); refreshRentSummary() } catch (error) { const message = error instanceof Error ? error.message : 'Unable to undo tenant vacate'; setBackendError(message); throw error } }} />}
+      {modal === 'editTenant' && <EditTenantModal tenant={data.tenants.find((tenant) => tenant.id === selectedTenantId)!} rooms={scoped.rooms} tenants={scoped.activeTenants} onClose={closeModal} onSubmit={(changes) => { const tenant = data.tenants.find((item) => item.id === selectedTenantId)!; const { applyRentToPending, ...tenantChanges } = changes; updateData((previous) => ({ ...previous, tenants: previous.tenants.map((item) => item.id === selectedTenantId ? { ...item, ...tenantChanges } : item) }), 'Edit Tenant', 'Tenants', `${role} ${currentUser.name} edited tenant ${tenant.name} details. Changed room from ${data.rooms.find((room) => room.id === tenant.roomId)?.number} to ${data.rooms.find((room) => room.id === changes.roomId)?.number}, rent from ${money(tenant.monthlyRent)} to ${money(changes.monthlyRent || 0)}.`); if (applyRentToPending && changes.monthlyRent !== undefined) { persistenceQueue.current = persistenceQueue.current.then(async () => { await updateUnsettledTenantRent(tenant.id, changes.monthlyRent!); const refreshed = await loadAppData(); dataRef.current = refreshed; setData(refreshed); refreshRentSummary() }).catch((error) => setBackendError(error instanceof Error ? error.message : 'Unable to update rent obligations')) } }} />}
       {modal === 'moveTenant' && <MoveTenantModal tenant={data.tenants.find((tenant) => tenant.id === selectedTenantId)!} rooms={scoped.rooms} tenants={scoped.activeTenants} onClose={closeModal} onSubmit={(roomId, bedNo, note) => { const tenant = data.tenants.find((item) => item.id === selectedTenantId)!; updateData((previous) => ({ ...previous, tenants: previous.tenants.map((item) => item.id === selectedTenantId ? { ...item, roomId, bedNo } : item) }), 'Move Tenant', 'Tenants', `${role} ${currentUser.name} moved tenant ${tenant.name} from Room ${data.rooms.find((room) => room.id === tenant.roomId)?.number} to Room ${data.rooms.find((room) => room.id === roomId)?.number} Bed ${bedNo} on ${formatDate(today)}.${note ? ` Reason: ${note}.` : ''}`) }} onSwap={async (tenantAId, tenantBId, tenantARoomId, tenantABedNo, tenantBRoomId, tenantBBedNo, _note) => { setBackendError(''); try { const result = await swapTenantRooms(tenantAId, tenantBId, tenantARoomId, tenantABedNo, tenantBRoomId, tenantBBedNo); if (!result.success) throw new Error(result.error || 'Swap failed'); const previous = dataRef.current; const tA = previous.tenants.find((t) => t.id === tenantAId); const tB = previous.tenants.find((t) => t.id === tenantBId); const roomA = previous.rooms.find((r) => r.id === tA?.roomId); const roomB = previous.rooms.find((r) => r.id === tB?.roomId); const logged = logActivity(previous, { userName: currentUser.name, userId: currentUser.id, userRole: role, branchId, branchName: branch?.name || '', module: 'Tenants', actionType: 'Swap Tenants', description: `${role} ${currentUser.name} swapped ${tA?.name || 'Tenant A'} and ${tB?.name || 'Tenant B'} between Room ${roomA?.number} Bed ${tA?.bedNo} and Room ${roomB?.number} Bed ${tB?.bedNo}.` }); dataRef.current = logged; setData(logged); await persistAppData(previous, logged, currentUser.id); const refreshedSwap = await refreshTables(getAffectedTables('swap'), dataRef.current); dataRef.current = refreshedSwap; setData(refreshedSwap); setSuccessMessage(`${tA?.name || 'Tenant'} and ${tB?.name || 'Tenant'} swapped successfully.`) } catch (error) { const message = error instanceof Error ? error.message : 'Swap failed'; setBackendError(message); throw error } }} />}
       {modal === 'editBranch' && <BranchModal branch={branch} onClose={closeModal} onDelete={() => openModal('deleteBranch')} onSubmit={(changes) => updateData((previous) => ({ ...previous, branches: previous.branches.map((item) => item.id === branchId ? { ...item, ...changes } : item) }), 'Edit Branch', 'Branches', `${role} ${currentUser.name} changed branch name from ${branch.name} to ${changes.name}. Address changed from ${branch.address} to ${changes.address}.`)} />}
       {modal === 'deleteBranch' && <DeleteBranchConfirmModal branch={branch} onClose={closeModal} onConfirm={async () => { setBackendError(''); await deleteBranchCascade(branchId, currentUser.id, currentUser.name, role, branch?.name); const refreshed = await loadAppData(); setData(refreshed); const remaining = refreshed.branches.filter((item) => item.active !== false && (isAdmin || currentUser.branchIds.includes(item.id))); if (remaining.length) setBranchId(remaining[0].id); else setBranchId(''); closeModal(); }} />}
@@ -950,7 +967,7 @@ function App() {
   )
 }
 
-function Dashboard({ scoped, setModal, setPage, setTenantTab, setTenantFilter, setRoomFloor, setFinanceTab, setPaymentFilter, setTicketFilter }: { scoped: ReturnType<typeof branchData>; setModal: (value: string) => void; setPage: (page: Page) => void; setTenantTab: (value: 'Active' | 'Left PG') => void; setTenantFilter: (value: string) => void; setRoomFloor: (value: string) => void; setFinanceTab: (value: string) => void; setPaymentFilter: (value: string) => void; setTicketFilter: (value: string) => void }) {
+function Dashboard({ scoped, rentSummary, refreshRentSummary, setModal, setPage, setTenantTab, setTenantFilter, setRoomFloor, setFinanceTab, setPaymentFilter, setTicketFilter }: { scoped: ReturnType<typeof branchData>; rentSummary: RentCollectionSummary | null; refreshRentSummary: () => void; setModal: (value: string) => void; setPage: (page: Page) => void; setTenantTab: (value: 'Active' | 'Left PG') => void; setTenantFilter: (value: string) => void; setRoomFloor: (value: string) => void; setFinanceTab: (value: string) => void; setPaymentFilter: (value: string) => void; setTicketFilter: (value: string) => void }) {
   const todayCollection = scoped.payments.filter((payment) => payment.date === today).reduce((sum, payment) => sum + payment.amount, 0)
   const monthlyCollection = scoped.payments.filter((payment) => payment.month === currentMonth).reduce((sum, payment) => sum + payment.amount, 0)
   const monthlyExpenses = scoped.cashbook.filter((entry) => entry.date.startsWith(currentMonth) && entry.type === 'Debit').reduce((sum, entry) => sum + entry.amount, 0)
@@ -976,6 +993,30 @@ function Dashboard({ scoped, setModal, setPage, setTenantTab, setTenantFilter, s
   ]
   return (
     <div className="grid gap-4">
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="relative overflow-hidden rounded-lg border-2 border-blue-200 bg-blue-50 p-4">
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-sm font-semibold text-blue-700">Expected Rent Till Month End</p>
+              <p className="mt-1 text-3xl font-black text-blue-900">{money(rentSummary?.expectedTillMonthEnd || 0)}</p>
+              <p className="mt-1 text-xs text-blue-600">Previous pending + {formatMonth(currentMonth)} outstanding</p>
+            </div>
+            <button onClick={refreshRentSummary} className="rounded p-1 text-blue-400 hover:bg-blue-100 hover:text-blue-600" title="Refresh summary"><RefreshCw size={14} /></button>
+          </div>
+          <p className="mt-2 text-xs text-blue-500" title="Total outstanding rent for all periods up to and including the current month. Includes unpaid balances from previous months and full current month rent regardless of due date.">{rentSummary?.tenantCountWithPending || 0} tenant{(rentSummary?.tenantCountWithPending || 0) !== 1 ? 's' : ''} with pending balance</p>
+        </div>
+        <div className="relative overflow-hidden rounded-lg border-2 border-rose-200 bg-rose-50 p-4">
+          <div className="flex items-start justify-between">
+            <div>
+              <p className="text-sm font-semibold text-rose-700">Pending Till Today</p>
+              <p className="mt-1 text-3xl font-black text-rose-900">{money(rentSummary?.pendingTillToday || 0)}</p>
+              <p className="mt-1 text-xs text-rose-600">Overdue through {formatDate(today)}</p>
+            </div>
+            <button onClick={refreshRentSummary} className="rounded p-1 text-rose-400 hover:bg-rose-100 hover:text-rose-600" title="Refresh summary"><RefreshCw size={14} /></button>
+          </div>
+          <p className="mt-2 text-xs text-rose-500" title="Rent that has actually become due up to today. Includes all previous unpaid months and current month obligations whose due date has arrived.">{rentSummary?.previousMonthsPending ? `Previous: ${money(rentSummary.previousMonthsPending)}` : 'No previous pending'}</p>
+        </div>
+      </div>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         <Metric icon={<IndianRupee />} label="Today's Collection" value={money(todayCollection)} onClick={() => setPage('Payments')} />
         <Metric icon={<IndianRupee />} label="Monthly Collection" value={money(monthlyCollection)} onClick={() => setPage('Payments')} />
