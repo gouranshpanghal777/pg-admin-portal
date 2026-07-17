@@ -587,6 +587,27 @@ export async function swapTenantRooms(
   return data as { success: boolean; error?: string }
 }
 
+
+export async function moveTenantRoom(input: {
+  tenantId: string
+  targetRoomId: string
+  targetBedNo: number
+  expectedRoomId: string
+  expectedBedNo: number
+  note?: string
+}): Promise<{ success: boolean; error?: string }> {
+  const { data, error } = await supabase.rpc('move_tenant_room', {
+    p_tenant_id: input.tenantId,
+    p_target_room_id: input.targetRoomId,
+    p_target_bed_no: input.targetBedNo,
+    p_expected_room_id: input.expectedRoomId,
+    p_expected_bed_no: input.expectedBedNo,
+    p_note: input.note || null,
+  })
+  if (error) throw databaseError('move_tenant_room RPC', error)
+  return data as { success: boolean; error?: string }
+}
+
 export type RentCollectionSummary = {
   expectedTillMonthEnd: number
   pendingTillToday: number

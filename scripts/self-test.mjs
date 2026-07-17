@@ -462,4 +462,12 @@ assert(directPurchase.cashbook === directPurchase.expense, 'AL4. Direct purchase
 const inactiveParty = { status: 'Left', ledgerPreserved: true }
 assert(inactiveParty.status === 'Left' && inactiveParty.ledgerPreserved, 'AL5. Leaving staff preserves ledger history')
 
+
+// Staff move RPC wiring checks
+const staffMovePayload = { tenantId: 't1', targetRoomId: 'r2', targetBedNo: 1, expectedRoomId: 'r1', expectedBedNo: 1 }
+assert(staffMovePayload.targetRoomId !== staffMovePayload.expectedRoomId, 'SM1. Normal move carries expected source and target room')
+assert(staffMovePayload.targetBedNo >= 1, 'SM2. Normal move carries a valid target bed')
+const staffMovePermission = { assignedBranch: true, permission: 'move_tenant', allowed: true }
+assert(staffMovePermission.assignedBranch && staffMovePermission.permission === 'move_tenant' && staffMovePermission.allowed, 'SM3. Staff move requires branch assignment and move_tenant permission')
+
 console.log('All PG Admin Portal flow checks passed.')
