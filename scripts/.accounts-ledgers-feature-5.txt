@@ -1,0 +1,107 @@
+ 'Direct Purchase & Payment', 'Discount / Credit', 'Opening Balance']
+  if (type === 'Vendor') return ['Bill / Purchase', 'Payment Made', 'Direct Purchase & Payment', 'Discount / Credit', 'Opening Balance']
+  if (type === 'Other') return ['Add Payable', 'Payment Made', 'Direct Purchase & Payment', 'Reduce Payable', 'Opening Balance']
+  return ['Simple Expense', 'Simple Cashbook Debit', 'Simple Cashbook Credit']
+}
+
+const dueNatures = new Set(['Salary Due', 'Bonus', 'Bill / Purchase', 'Rent Due', 'Maintenance / Other Bill', 'Add Payable'])
+const increaseNatures = new Set([...dueNatures, 'Opening Balance'])
+const decreaseNatures = new Set(['Salary Payment', 'Advance Given', 'Deduction', 'Final Settlement', 'Payment Made', 'Rent Payment', 'Discount / Credit', 'Reduce Payable'])
+const cashNatures = new Set(['Salary Payment', 'Advance Given', 'Final Settlement', 'Payment Made', 'Rent Payment', 'Direct Purchase & Payment'])
+const directNature = 'Direct Purchase & Payment'
+
+export function applyLedgerEntry(previous: AppData, branchId: string, input: UnifiedLedgerEntryInput): AppData {
+  const category = previous.categories.find((item) => item.id === input.categoryId && item.branchId === branchId)
+  if (!category) throw new Error('Select a valid category before saving.')
+
+  const now = new Date().toISOString()
+  let ledgerParties = previous.ledgerParties
+  let partyId = input.partyId
+  let party = partyId ? ledgerParties.find((item) => item.id === partyId && item.branchId === branchId) : undefined
+
+  if (input.newParty) {
+    const normalizedName = input.newParty.name.trim().toUpperCase()
+    if (!normalizedName) throw new Error('Enter the staff/vendor name.')
+    const duplicate = ledgerParties.some((item) => item.branchId === branchId && item.categoryId === input.categoryId && item.name.trim().toUpperCase() === normalizedName && item.status !== 'Inactive')
+    if (duplicate) throw new Error('A party with this name already exists in the selected category.')
+    partyId = newId()
+    party = {
+      id: partyId,
+      branchId,
+      categoryId: input.categoryId,
+      name: normalizedName,
+      type: input.newParty.type,
+      phone: input.newParty.phone || '',
+      joiningDate: input.newParty.joiningDate,
+      monthlyAmount: input.newParty.monthlyAmount,
+      dueDay: input.newParty.dueDay,
+      status: 'Active',
+      notes: input.newParty.notes || '',
+    }
+    ledgerParties = [party, ...ledgerParties]
+  }
+
+  if (input.nature.startsWith('Simple ')) {
+    const amount = Number(input.amount)
+    if (!(amount > 0)) throw new Error('Amount must be greater than zero.')
+    const cashbookId = newId()
+    const expenseId = input.nature === 'Simple Expense' ? newId() : undefined
+    const type = input.nature === 'Simple Cashbook Credit' ? 'Credit' : 'Debit'
+    const description = input.description.trim() || `${input.nature} - ${category.name}`
+    return {
+      ...previous,
+      ledgerParties,
+      expenses: expenseId ? [{
+        id: expenseId,
+        branchId,
+        category: category.name as AppData['expenses'][number]['category'],
+        categoryId: category.id,
+        description,
+        amount,
+        date: input.date,
+        vendor: '',
+        cashbookId,
+      }, ...previous.expenses] : previous.expenses,
+      cashbook: [{
+        id: cashbookId,
+        branchId,
+        type,
+        amount,
+        description,
+        date: input.date,
+        source: expenseId ? 'Expense' : 'Manual',
+        linkedId: expenseId,
+        category: category.name,
+        categoryId: category.id,
+        paymentMode: input.paymentMode,
+        reference: input.reference,
+        remarks: input.remarks,
+        createdAt: now,
+      }, ...previous.cashbook],
+    }
+  }
+
+  if (!party || !partyId) throw new Error('Select or add a staff/vendor/party.')
+  if (party.categoryId !== input.categoryId) throw new Error('The selected party is not linked to this category.')
+  if (party.status !== 'Active') throw new Error('This party is inactive/left. Reactivate it before adding new entries.')
+
+  const amount = Number(input.amount)
+  if (!(amount > 0)) throw new Error('Amount must be greater than zero.')
+  const period = input.period || input.date.slice(0, 7)
+  if (!/^\d{4}-\d{2}$/.test(period)) throw new Error('Select a valid month/period.')
+
+  if ((input.nature === 'Salary Due' || input.nature === 'Rent Due') && previous.ledgerEntries.some((entry) => entry.partyId === partyId && entry.period === period && entry.nature === input.nature)) {
+    throw new Error(`${input.nature} is already generated for ${showMonth(period)}.`)
+  }
+
+  const ledgerEntryId = newId()
+  const createsExpense = dueNatures.has(input.nature) || input.nature === directNature
+  const createsCashbook = cashNatures.has(input.nature)
+  const expenseId = createsExpense ? newId() : undefined
+  const cashbookId = createsCashbook ? newId() : undefined
+
+  let debitAmount = 0
+  let creditAmount = 0
+  if (input.nature === directNature) {
+    debitAmount = amount
+  
