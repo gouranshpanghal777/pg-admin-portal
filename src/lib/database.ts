@@ -320,6 +320,26 @@ export async function admitTenant(input: { requestId: string; branchId: string; 
   throw databaseError('admit_tenant_v2 RPC', lastError as { message?: string; code?: string })
 }
 
+export async function rejoinTenantWithObligation(input: {
+  tenantId: string
+  roomId: string
+  bedNo: number
+  rejoinDate: string
+  dueDate: string
+  monthlyRent: number
+}) {
+  const { data, error } = await supabase.rpc('rejoin_tenant_v2', {
+    p_tenant_id: input.tenantId,
+    p_room_id: input.roomId,
+    p_bed_no: input.bedNo,
+    p_rejoin_date: input.rejoinDate,
+    p_due_date: input.dueDate,
+    p_monthly_rent: input.monthlyRent,
+  })
+  if (error) throw databaseError('rejoin_tenant_v2 RPC', error)
+  return data as { tenant_id: string; branch_id: string; period: string; ledger: Record<string, unknown> }
+}
+
 export async function editTenantWithRentAdjustment(input: {
   tenantId: string
   name: string

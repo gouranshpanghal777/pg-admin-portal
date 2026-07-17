@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase, supabaseConfigured } from './lib/supabase'
-import { admitTenant, cleanupOldActivityLogs, createStaffAccount, deactivateStaffAccount, deleteBranchCascade, deleteCashbookEntryCascade, deleteTenantWithPayments, editTenantWithRentAdjustment, getAffectedTables, getBranchRentCollectionSummary, loadAppData, loadActivityLogs, persistAppData, reactivateUserAccount, recordSplitPayment, refreshTables, resetUserPassword, swapTenantRooms, undoVacateTenant, vacateTenantErp } from './lib/database'
+import { admitTenant, cleanupOldActivityLogs, createStaffAccount, deactivateStaffAccount, deleteBranchCascade, deleteCashbookEntryCascade, deleteTenantWithPayments, editTenantWithRentAdjustment, getAffectedTables, getBranchRentCollectionSummary, loadAppData, loadActivityLogs, persistAppData, reactivateUserAccount, recordSplitPayment, refreshTables, rejoinTenantWithObligation, resetUserPassword, swapTenantRooms, undoVacateTenant, vacateTenantErp } from './lib/database'
 import type { RentCollectionSummary } from './lib/database'
 import { importedRentPaidMonths } from './data/farukhnagarRentRegister'
 import {
@@ -333,13 +333,18 @@ const periodsBetween = (start: string, end: string) => {
   for (let period = start; period <= end; period = nextPeriod(period)) periods.push(period)
   return periods
 }
-function getRentLedgerState(tenant: Tenant, payments: Payment[], obligations: PaymentObligation[] = []) {
+function getRentLedgerState(tenant: Tenant, payments: Payment[], obligations: PaymentObligation[] = [], advances: AdvanceMovement[] = []) {
   const rentObligations = new Map<string, PaymentObligation>()
   for (const item of obligations) if (item.tenantId === tenant.id && item.paymentType === 'Rent') rentObligations.set(item.period, item)
   const rentPayments = new Map<string, number>()
   for (const payment of payments) {
     if (payment.tenantId !== tenant.id || payment.paymentType !== 'Rent') continue
     rentPayments.set(payment.month, (rentPayments.get(payment.month) || 0) + payment.amount)
+  }
+  const advanceUsedByPeriod = new Map<string, number>()
+  for (const movement of advances) {
+    if (movement.tenantId !== tenant.id || movement.type !== 'used' || !movement.period) continue
+    advanceUsedByPeriod.set(movement.period, (advanceUsedByPeriod.get(movement.period) || 0) + movement.amount)
   }
   const currentStay = tenant.rejoins?.at(-1)
   const cycleStartDate = currentStay?.rejoinDate || tenant.joiningDate
@@ -355,7 +360,7 @@ function getRentLedgerState(tenant: Tenant, payments: Payment[], obligations: Pa
     const recordedPayments = rentPayments.get(period) || 0
     const agreed = obligation?.agreed ?? tenant.monthlyRent
     const received = Math.max(obligation?.received ?? 0, recordedPayments, importedPaidMonths.has(period) ? agreed : 0)
-    const advanceApplied = obligation?.advanceApplied ?? 0
+    const advanceApplied = advanceUsedByPeriod.get(period) || 0
     const pending = Math.max(0, agreed - received - advanceApplied)
     if (pending > 0) {
       const originalDueDate = obligation?.dueDate || rentDueDateForPeriod(dueAnchor, period)
@@ -376,8 +381,8 @@ function getCalculatedRentDueDate(tenant: Tenant, payments: Payment[], obligatio
   return getRentLedgerState(tenant, payments, obligations).dueDate
 }
 
-const rentLedgerState = (tenant: Tenant, obligations: PaymentObligation[], payments: Payment[]) =>
-  getRentLedgerState(tenant, payments, obligations)
+const rentLedgerState = (tenant: Tenant, obligations: PaymentObligation[], payments: Payment[], advances: AdvanceMovement[] = []) =>
+  getRentLedgerState(tenant, payments, obligations, advances)
 
 function logActivity(data: AppData, input: { userName: string; userId: string; userRole: Role; branchId: string; branchName: string; module: string; actionType: string; description: string; metadata?: Record<string, string | number> }): AppData {
   const log: ActivityLog = {
@@ -441,7 +446,13 @@ function branchData(data: AppData, branchId: string) {
     if (tenantObligations) tenantObligations.push(obligation)
     else obligationsByTenant.set(obligation.tenantId, [obligation])
   }
-  const rentStates = new Map(activeTenants.map((tenant) => [tenant.id, getRentLedgerState(tenant, paymentsByTenant.get(tenant.id) || [], obligationsByTenant.get(tenant.id) || [])]))
+  const advancesByTenant = new Map<string, AdvanceMovement[]>()
+  for (const movement of advances) {
+    const tenantAdvances = advancesByTenant.get(movement.tenantId)
+    if (tenantAdvances) tenantAdvances.push(movement)
+    else advancesByTenant.set(movement.tenantId, [movement])
+  }
+  const rentStates = new Map(activeTenants.map((tenant) => [tenant.id, getRentLedgerState(tenant, paymentsByTenant.get(tenant.id) || [], obligationsByTenant.get(tenant.id) || [], advancesByTenant.get(tenant.id) || [])]))
   const overdue = activeTenants.reduce((sum, tenant) => rentStates.get(tenant.id)?.status === 'Overdue' ? sum + (rentStates.get(tenant.id)?.pending || 0) : sum, 0)
   const pending = activeTenants.reduce((sum, tenant) => {
     const state = rentStates.get(tenant.id)
@@ -918,19 +929,27 @@ function App() {
       {modal === 'rejoinTenant' && <RejoinTenantModal tenant={data.tenants.find((tenant) => tenant.id === selectedTenantId)!} rooms={scoped.rooms} activeTenants={scoped.activeTenants} onClose={closeModal} onSubmit={async (payload) => {
         const tenant = data.tenants.find((item) => item.id === selectedTenantId)!
         const room = data.rooms.find((item) => item.id === payload.roomId)!
-        const bedNo = data.tenants.filter((item) => item.roomId === payload.roomId && item.status !== 'Left').length + 1
-        const rejoin = { rejoinDate: payload.rejoinDate, dueDate: payload.dueDate, roomId: payload.roomId, monthlyRent: payload.monthlyRent, initialRentReceived: payload.rentReceived, paymentDate: payload.paymentDate, paymentMode: payload.paymentMode, previousLeft: tenant.left }
-        updateData((previous) => ({ ...previous, tenants: previous.tenants.map((item) => item.id === tenant.id ? { ...item, roomId: payload.roomId, bedNo, monthlyRent: payload.monthlyRent, dueDate: payload.dueDate, status: 'Active', left: undefined, notice: undefined, paidThisMonth: 0, rejoins: [...(item.rejoins || []), rejoin] } : item) }), 'Rejoin Tenant', 'Tenants', `${role} ${currentUser.name} rejoined tenant ${tenant.name} in Room ${room.number} on ${formatDate(payload.rejoinDate)} at rent ${money(payload.monthlyRent)}. Payment received at rejoin: ${money(payload.rentReceived)}.`)
-        const saveRejoin = persistenceQueue.current.then(async () => {
+        const occupiedBeds = new Set(data.tenants.filter((item) => item.roomId === payload.roomId && item.status !== 'Left' && item.id !== tenant.id).map((item) => item.bedNo))
+        const bedNo = Array.from({ length: room.beds }, (_, index) => index + 1).find((bed) => !occupiedBeds.has(bed))
+        if (!bedNo) throw new Error(`Room ${room.number} has no vacant bed.`)
+        setBackendError('')
+        try {
+          await rejoinTenantWithObligation({ tenantId: tenant.id, roomId: payload.roomId, bedNo, rejoinDate: payload.rejoinDate, dueDate: payload.dueDate, monthlyRent: payload.monthlyRent })
           if (payload.rentReceived > 0) await recordSplitPayment({ requestId: payload.paymentRequestId, tenantId: tenant.id, branchId, rentAmount: payload.rentReceived, securityAmount: 0, electricityAmount: 0, otherAmount: 0, paymentDate: payload.paymentDate, rentPeriod: payload.rejoinDate.slice(0, 7), paymentMode: payload.paymentMode, description: `Rejoin rent payment - ${tenant.name}` })
-          const refreshed = await loadAppData()
-          dataRef.current = refreshed
-          setData(refreshed)
-        })
-        persistenceQueue.current = saveRejoin.catch((error) => setBackendError(error instanceof Error ? error.message : 'Unable to rejoin tenant'))
-        await saveRejoin
+          const refreshed = await refreshTables(['tenants', 'rooms', 'payments', 'cashbook_entries', 'payment_obligations', 'tenant_advances'], dataRef.current)
+          const logged = logActivity(refreshed, { userName: currentUser.name, userId: currentUser.id, userRole: role, branchId, branchName: branch.name, module: 'Tenants', actionType: 'Rejoin Tenant', description: `${role} ${currentUser.name} rejoined tenant ${tenant.name} in Room ${room.number} on ${formatDate(payload.rejoinDate)}. ${formatMonth(payload.rejoinDate.slice(0, 7))} rent obligation created even when no payment was received.` })
+          await persistAppData(refreshed, logged, currentUser.id)
+          dataRef.current = logged
+          setData(logged)
+          refreshRentSummary()
+          setSuccessMessage(`${tenant.name} rejoined successfully. ${formatMonth(payload.rejoinDate.slice(0, 7))} rent is tracked from the rejoin date.`)
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'Unable to rejoin tenant'
+          setBackendError(message)
+          throw error
+        }
       }} />}
-      {modal === 'payment' && <PaymentModal tenants={scoped.activeTenants} payments={scoped.payments} obligations={scoped.obligations} selectedTenantId={selectedTenantId} onClose={closeModal} onSubmit={async (payment) => {
+      {modal === 'payment' && <PaymentModal tenants={scoped.activeTenants} payments={scoped.payments} obligations={scoped.obligations} advances={scoped.advances} selectedTenantId={selectedTenantId} onClose={closeModal} onSubmit={async (payment) => {
         setBackendError('')
         try {
           await recordSplitPayment({ ...payment, branchId })
@@ -945,6 +964,7 @@ function App() {
         }
       }} />}
       {modal === 'notice' && <NoticeModal onClose={closeModal} onSubmit={(notice) => { const tenant = data.tenants.find((item) => item.id === selectedTenantId)!; updateData((previous) => ({ ...previous, tenants: previous.tenants.map((item) => item.id === selectedTenantId ? { ...item, status: 'Notice', notice } : item) }), 'Issue Tenant Notice', 'Tenants', `${role} ${currentUser.name} issued vacating notice to ${tenant.name} in Room ${data.rooms.find((room) => room.id === tenant.roomId)?.number}. Notice details: ${notice}.`) }} />}
+      {modal === 'cancelNotice' && (() => { const tenant = data.tenants.find((item) => item.id === selectedTenantId)!; return <ConfirmModal title="Cancel Vacating Notice?" message={`Remove the active vacating notice for ${tenant.name}? Rent ledger, payments, cashbook and tenant history will remain unchanged.`} confirmLabel="Cancel Notice" onClose={closeModal} onConfirm={() => updateData((previous) => ({ ...previous, tenants: previous.tenants.map((item) => item.id === tenant.id ? { ...item, status: 'Active', notice: undefined } : item) }), 'Cancel Tenant Notice', 'Tenants', `${role} ${currentUser.name} cancelled the vacating notice for ${tenant.name}. Rent ledger and financial records were unchanged.`)} /> })()}
       {modal === 'vacate' && (() => { const tenant = data.tenants.find((item) => item.id === selectedTenantId)!; const rentState = scoped.rentStates.get(tenant.id) || rentLedgerState(tenant, scoped.obligations, scoped.payments); return <VacateModal tenant={tenant} dueDate={rentState.dueDate} alreadyReceived={rentState.received} onClose={closeModal} onSubmit={async (left, settlementRequestId) => { setBackendError(''); try { if ((left.settlementReceived || 0) > 0) await recordSplitPayment({ requestId: settlementRequestId, tenantId: tenant.id, branchId, rentAmount: left.settlementReceived || 0, securityAmount: 0, electricityAmount: 0, otherAmount: 0, paymentDate: left.leftDate, rentPeriod: rentState.period, paymentMode: 'Cash', description: `Vacate settlement - ${tenant.name}` }); await vacateTenantErp(selectedTenantId, left); const refreshedVacate = await refreshTables(getAffectedTables('vacate'), dataRef.current); dataRef.current = refreshedVacate; setData(refreshedVacate); refreshRentSummary() } catch (error) { setBackendError(error instanceof Error ? error.message : 'Unable to vacate tenant'); throw error } }} /> })()}
       {modal === 'confirmUndoVacate' && <ConfirmModal title="Undo tenant vacate" message="Restore this tenant to the original room and reverse any security refund or deduction created during vacating? Payment history will remain unchanged." confirmLabel="Undo Vacate" onClose={closeModal} onConfirm={async () => { setBackendError(''); try { await undoVacateTenant(selectedTenantId); const refreshedUndo = await refreshTables(getAffectedTables('vacate'), dataRef.current); dataRef.current = refreshedUndo; setData(refreshedUndo); refreshRentSummary() } catch (error) { const message = error instanceof Error ? error.message : 'Unable to undo tenant vacate'; setBackendError(message); throw error } }} />}
       {modal === 'editTenant' && (() => {
@@ -1134,7 +1154,7 @@ function TenantsPage({ data, scoped, tenantTab, setTenantTab, filter, setFilter,
             const isVacateDue = vacateDueDayCount !== null && vacateDueDayCount >= 0
             return <tr key={tenant.id} className="border-t border-slate-100">
               <td className="p-3 font-semibold">{tenant.name}</td><td className="p-3 text-sm">{tenant.email}<br />{tenant.phone}</td><td className="p-3">{room.number}</td><td className="p-3">{room.type}</td><td className="p-3">{money(tenant.monthlyRent)}</td><td className="p-3 text-emerald-700">{money(rentState.received + rentState.advanceApplied)}</td><td className="p-3 text-rose-700">{money(balance)}</td><td className="p-3">{money(tenant.security)}</td><td className="p-3 text-emerald-700">{money(securityReceived)}</td><td className="p-3">{securityBalance === 0 ? <Badge tone="green">Cleared</Badge> : money(securityBalance)}</td><td className="p-3">{tenant.electricity === 'Fixed' ? money(tenant.electricityAmount) : 'Included'}</td><td className="p-3">{formatDate(tenant.joiningDate)}</td><td className="p-3 font-semibold">{formatDate(calculatedRentDueDate)}</td><td className="p-3"><Badge tone={tenant.status === 'Notice' || tenant.status === 'Needs Verification' ? 'orange' : status === 'Clear' || status === 'Paid' ? 'green' : status === 'Overdue' ? 'red' : 'orange'}>{tenant.status === 'Notice' || tenant.status === 'Needs Verification' ? tenant.status : status}</Badge>{isVacateDue && <div className="mt-1"><span className="inline-flex items-center gap-1 rounded-full bg-rose-600 px-2 py-0.5 text-xs font-bold text-white">VACATE {vacateDueDayCount === 0 ? 'DUE TODAY' : `OVERDUE ${vacateDueDayCount}D`}</span><div className="mt-0.5 text-[10px] text-rose-700">Notice: {formatDate(tenant.notice!.expectedLeavingDate)}</div></div>}</td>
-              <td className="p-3"><div className="flex min-w-max items-center gap-1"><CompactAction title="View Tenant Ledger" onClick={() => { setSelectedTenantId(tenant.id); setModal('tenantLedger') }}><Eye size={14} /></CompactAction>{isAdmin && <CompactAction title="Edit" onClick={() => { setSelectedTenantId(tenant.id); setModal('editTenant') }}><Edit3 size={14} /></CompactAction>}{canAction('move_tenant') && <CompactAction title="Move" onClick={() => { setSelectedTenantId(tenant.id); setModal('moveTenant') }}><Home size={14} /></CompactAction>}{canAction('add_payment') && <CompactAction title="Add Payment" onClick={() => { setSelectedTenantId(tenant.id); setModal('payment') }}><IndianRupee size={14} /></CompactAction>}<a title="WhatsApp Reminder" aria-label="WhatsApp Reminder" className="grid h-8 w-8 place-items-center rounded-md border border-slate-400 text-emerald-700 hover:bg-emerald-50" href={whatsapp} target="_blank"><MessageCircle size={14} /></a><CompactAction title="Notice" onClick={() => { setSelectedTenantId(tenant.id); setModal('notice') }}><CalendarClock size={14} /></CompactAction>{canAction('vacate_tenant') && <CompactAction title="Vacate" onClick={() => { setSelectedTenantId(tenant.id); setModal('vacate') }}><LogOut size={14} /></CompactAction>}{isAdmin && <CompactAction title="Delete" danger onClick={() => { setSelectedTenantId(tenant.id); setModal('confirmDeleteTenant') }}><Trash2 size={14} /></CompactAction>}</div></td>
+              <td className="p-3"><div className="flex min-w-max items-center gap-1"><CompactAction title="View Tenant Ledger" onClick={() => { setSelectedTenantId(tenant.id); setModal('tenantLedger') }}><Eye size={14} /></CompactAction>{isAdmin && <CompactAction title="Edit" onClick={() => { setSelectedTenantId(tenant.id); setModal('editTenant') }}><Edit3 size={14} /></CompactAction>}{canAction('move_tenant') && <CompactAction title="Move" onClick={() => { setSelectedTenantId(tenant.id); setModal('moveTenant') }}><Home size={14} /></CompactAction>}{canAction('add_payment') && <CompactAction title="Add Payment" onClick={() => { setSelectedTenantId(tenant.id); setModal('payment') }}><IndianRupee size={14} /></CompactAction>}<a title="WhatsApp Reminder" aria-label="WhatsApp Reminder" className="grid h-8 w-8 place-items-center rounded-md border border-slate-400 text-emerald-700 hover:bg-emerald-50" href={whatsapp} target="_blank"><MessageCircle size={14} /></a><CompactAction title="Notice" onClick={() => { setSelectedTenantId(tenant.id); setModal('notice') }}><CalendarClock size={14} /></CompactAction>{(tenant.notice || tenant.status === 'Notice') && <CompactAction title="Cancel Vacating Notice" onClick={() => { setSelectedTenantId(tenant.id); setModal('cancelNotice') }}><X size={14} /></CompactAction>}{canAction('vacate_tenant') && <CompactAction title="Vacate" onClick={() => { setSelectedTenantId(tenant.id); setModal('vacate') }}><LogOut size={14} /></CompactAction>}{isAdmin && <CompactAction title="Delete" danger onClick={() => { setSelectedTenantId(tenant.id); setModal('confirmDeleteTenant') }}><Trash2 size={14} /></CompactAction>}</div></td>
             </tr>
           })}
         </DataTable>}
@@ -1385,7 +1405,7 @@ function TenantLedgerModal({ tenant, data, onClose }: { tenant: Tenant; data: Ap
     const agreed = obligation?.agreed ?? tenant.monthlyRent
     const recorded = payments.filter((item) => item.paymentType === 'Rent' && item.month === period).reduce((sum, item) => sum + item.amount, 0)
     const imported = (importedRentPaidMonths[tenant.name.trim().toUpperCase()] || []).includes(period) ? agreed : 0
-    const advanceApplied = obligation?.advanceApplied ?? advances.filter((item) => item.type === 'used' && item.period === period).reduce((sum, item) => sum + item.amount, 0)
+    const advanceApplied = advances.filter((item) => item.type === 'used' && item.period === period).reduce((sum, item) => sum + item.amount, 0)
     const received = Math.max(obligation?.received ?? 0, recorded, imported)
     return { id: obligation?.id || `derived-${tenant.id}-${period}`, period, agreed, received, advanceApplied, dueDate: obligation?.dueDate || rentDueDateForPeriod(tenant.dueDate, period), status: obligation?.status || (received + advanceApplied >= agreed ? 'Paid' : received + advanceApplied > 0 ? 'Partial' : 'Pending') }
   })
@@ -1581,7 +1601,7 @@ function AdmitTenantModal({ rooms, tenants, canReceivePayment, onClose, onSubmit
 
 type SplitPaymentInput = { requestId: string; tenantId: string; rentAmount: number; securityAmount: number; electricityAmount: number; otherAmount: number; paymentDate: string; rentPeriod?: string; paymentMode: string; description: string }
 
-function PaymentModal({ tenants, payments, obligations, selectedTenantId, onClose, onSubmit }: { tenants: Tenant[]; payments: Payment[]; obligations: PaymentObligation[]; selectedTenantId: string; onClose: () => void; onSubmit: (payment: SplitPaymentInput) => Promise<void> }) {
+function PaymentModal({ tenants, payments, obligations, advances, selectedTenantId, onClose, onSubmit }: { tenants: Tenant[]; payments: Payment[]; obligations: PaymentObligation[]; advances: AdvanceMovement[]; selectedTenantId: string; onClose: () => void; onSubmit: (payment: SplitPaymentInput) => Promise<void> }) {
   const [tenantId, setTenantId] = useState(selectedTenantId || tenants[0]?.id || '')
   const [paymentMode, setPaymentMode] = useState('Cash')
   const [paymentDate, setPaymentDate] = useState(today)
@@ -1594,7 +1614,7 @@ function PaymentModal({ tenants, payments, obligations, selectedTenantId, onClos
   const savingRef = useRef(false)
   const [error, setError] = useState('')
   const tenant = tenants.find((item) => item.id === tenantId)
-  const rentState = tenant ? getRentLedgerState(tenant, payments, obligations) : undefined
+  const rentState = tenant ? getRentLedgerState(tenant, payments, obligations, advances) : undefined
   const rentBalance = rentState?.pending || 0
   const securityReceived = tenant ? Math.max(tenant.securityReceived || 0, paymentTotal(payments, 'Security Deposit', tenant.id, null)) : 0
   const securityBalance = tenant ? Math.max(0, tenant.security - securityReceived) : 0
