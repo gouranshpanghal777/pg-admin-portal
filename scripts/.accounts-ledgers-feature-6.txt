@@ -1,0 +1,106 @@
+   creditAmount = amount
+  } else if (increaseNatures.has(input.nature)) {
+    debitAmount = amount
+  } else if (decreaseNatures.has(input.nature)) {
+    creditAmount = amount
+  } else {
+    throw new Error('Unsupported ledger entry type.')
+  }
+
+  const description = input.description.trim() || `${input.nature} - ${party.name}`
+  const ledgerEntry: LedgerEntry = {
+    id: ledgerEntryId,
+    branchId,
+    partyId,
+    categoryId: category.id,
+    nature: input.nature,
+    amount,
+    debitAmount,
+    creditAmount,
+    date: input.date,
+    period,
+    description,
+    paymentMode: createsCashbook ? input.paymentMode : undefined,
+    reference: input.reference,
+    remarks: input.remarks,
+    cashbookId,
+    expenseId,
+    createdAt: now,
+  }
+
+  return {
+    ...previous,
+    ledgerParties,
+    ledgerEntries: [ledgerEntry, ...previous.ledgerEntries],
+    expenses: expenseId ? [{
+      id: expenseId,
+      branchId,
+      category: category.name as AppData['expenses'][number]['category'],
+      categoryId: category.id,
+      description,
+      amount,
+      date: input.date,
+      vendor: party.name,
+      cashbookId,
+    }, ...previous.expenses] : previous.expenses,
+    cashbook: cashbookId ? [{
+      id: cashbookId,
+      branchId,
+      type: 'Debit',
+      amount,
+      description,
+      date: input.date,
+      source: expenseId ? 'Expense' : 'Manual',
+      linkedId: expenseId || ledgerEntryId,
+      category: category.name,
+      categoryId: category.id,
+      paymentMode: input.paymentMode,
+      reference: input.reference || `LEDGER|${partyId}|${ledgerEntryId}`,
+      remarks: input.remarks,
+      createdAt: now,
+    }, ...previous.cashbook] : previous.cashbook,
+  }
+}
+
+function Modal({ title, children, onClose, wide = false }: { title: string; children: ReactNode; onClose: () => void; wide?: boolean }) {
+  return <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/40 p-4 backdrop-blur-sm"><div className={`max-h-[92vh] w-full ${wide ? 'max-w-6xl' : 'max-w-2xl'} overflow-auto rounded-lg bg-white p-5 shadow-2xl`}><div className="mb-4 flex items-center justify-between gap-3"><h2 className="text-xl font-black text-slate-900">{title}</h2><button type="button" aria-label="Close" onClick={onClose} className="rounded-md p-2 text-slate-500 hover:bg-slate-100"><X size={20} /></button></div>{children}</div></div>
+}
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return <label className="grid gap-1 text-sm font-semibold text-slate-700">{label}{children}</label>
+}
+
+function SmallButton({ children, onClick, tone = 'blue', disabled = false }: { children: ReactNode; onClick?: () => void; tone?: 'blue' | 'green' | 'red' | 'soft'; disabled?: boolean }) {
+  const tones = {
+    blue: 'bg-blue-600 text-white hover:bg-blue-700',
+    green: 'bg-emerald-600 text-white hover:bg-emerald-700',
+    red: 'bg-rose-600 text-white hover:bg-rose-700',
+    soft: 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50',
+  }
+  return <button type="button" disabled={disabled} onClick={onClick} className={`inline-flex min-h-10 items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-bold disabled:opacity-50 ${tones[tone]}`}>{children}</button>
+}
+
+function PartyModal({ party, categories, branchId, onClose, onSave }: { party?: LedgerParty; categories: Category[]; branchId: string; onClose: () => void; onSave: (party: LedgerParty) => void }) {
+  const [categoryId, setCategoryId] = useState(party?.categoryId || categories[0]?.id || '')
+  const [type, setType] = useState<LedgerPartyType>(party?.type || 'Staff')
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    if (!categoryId) return
+    onSave({
+      id: party?.id || newId(),
+      branchId,
+      categoryId,
+      name: String(form.get('name')).trim().toUpperCase(),
+      type,
+      phone: String(form.get('phone') || ''),
+      joiningDate: String(form.get('joiningDate') || currentDate()),
+      monthlyAmount: Number(form.get('monthlyAmount') || 0),
+      dueDay: Math.min(31, Math.max(1, Number(form.get('dueDay') || 1))),
+      status: String(form.get('status') || 'Active') as LedgerParty['status'],
+      leftDate: String(form.get('leftDate') || '') || undefined,
+      notes: String(form.get('notes') || ''),
+    })
+    onClose()
+  }
+  return <Modal title={party ? 'Edit Ledger Party' : 'Add Staff / Vendor / Owner'} onClose={onClose}><form className="grid gap-4 md:grid-cols-2" onSubmit={submit}><Field label="Linked category"><select className={inputClass} value={categoryId} onChange={(event) => setCategoryId(event.target.value)} required><option value="">Select category</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></Field><Field label="Party type"><select className={inputClass} value={type} onChange={(event) => setType(event.target.value as LedgerPartyType)}><o
