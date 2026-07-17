@@ -1071,9 +1071,45 @@ function App() {
         catch (error) { const message = error instanceof Error ? error.message : 'Cashbook deletion failed'; setBackendError(message); throw error }
       }} />}
       {modal === 'fiveMonthRegister' && <FiveMonthRegisterModal data={data} scoped={scoped} branch={branch} visibleBranches={visibleBranches} onClose={closeModal} onExport={(type, format) => { const previous = dataRef.current; const logged = logActivity(previous, { userName: currentUser.name, userId: currentUser.id, userRole: role, branchId, branchName: branch?.name || '', module: 'Report', actionType: 'Export', description: `${role} ${currentUser.name} exported ${type} as ${format} for ${branch?.name}.` }); dataRef.current = logged; setData(logged); persistenceQueue.current = persistenceQueue.current.then(() => persistAppData(previous, logged, currentUser.id)).catch(() => {}) }} />}
+      {modal === 'activityHistory' && <ActivityHistoryModal logs={scoped.activityLogs} onClose={closeModal} />}
       {modal === 'notifications' && <Modal title="Notifications" onClose={closeModal}>{notifications.length ? <div className="grid gap-2">{notifications.map((note) => <div key={note} className="rounded-md bg-orange-50 p-3 text-sm font-semibold text-orange-800">{note}</div>)}</div> : <p>No active alerts.</p>}</Modal>}
     </div>
   )
+}
+
+
+function ActivityHistoryModal({ logs, onClose }: { logs: ActivityLog[]; onClose: () => void }) {
+  const pageSize = 10
+  const [page, setPage] = useState(0)
+  const [userFilter, setUserFilter] = useState('All')
+  const [moduleFilter, setModuleFilter] = useState('All')
+  const users = Array.from(new Set(logs.map((log) => log.userName).filter(Boolean))).sort((a, b) => a.localeCompare(b))
+  const modules = Array.from(new Set(logs.map((log) => log.module).filter(Boolean))).sort((a, b) => a.localeCompare(b))
+  const filtered = logs.filter((log) => (userFilter === 'All' || log.userName === userFilter) && (moduleFilter === 'All' || log.module === moduleFilter))
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
+  const safePage = Math.min(page, totalPages - 1)
+  const start = safePage * pageSize
+  const visible = filtered.slice(start, start + pageSize)
+  const resetFilters = () => { setUserFilter('All'); setModuleFilter('All'); setPage(0) }
+  return <Modal title="Activity History - Last 30 Days" wide onClose={onClose}>
+    <div className="grid gap-4">
+      <div className="flex flex-wrap items-end gap-3">
+        <Field label="Staff / Admin"><select className={inputClass} value={userFilter} onChange={(event) => { setUserFilter(event.target.value); setPage(0) }}><option>All</option>{users.map((name) => <option key={name} value={name}>{name}</option>)}</select></Field>
+        <Field label="Module"><select className={inputClass} value={moduleFilter} onChange={(event) => { setModuleFilter(event.target.value); setPage(0) }}><option>All</option>{modules.map((module) => <option key={module} value={module}>{module}</option>)}</select></Field>
+        <Button tone="soft" onClick={resetFilters}>Clear filters</Button>
+        <div className="flex-1" />
+        <p className="text-sm font-semibold text-slate-600">{filtered.length ? `${start + 1}-${Math.min(start + pageSize, filtered.length)} of ${filtered.length}` : '0 entries'}</p>
+      </div>
+      <div className="grid gap-2">
+        {visible.map((log) => <div key={log.id} className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm"><div className="flex flex-wrap items-start justify-between gap-2"><div><b>{log.actionType}</b><span className="ml-2 text-xs text-slate-500">{log.module} · {log.userName} ({log.role})</span></div><span className="text-xs font-medium text-slate-500">{formatDateTime(log.at)}</span></div><p className="mt-1 text-slate-700">{log.description}</p></div>)}
+        {!visible.length && <div className="rounded-md bg-slate-50 p-5 text-center text-sm text-slate-500">No activity found for these filters.</div>}
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-3">
+        <p className="text-xs text-slate-500">Logs remain available for 30 days. Page {safePage + 1} of {totalPages}.</p>
+        <div className="flex gap-2"><Button tone="soft" disabled={safePage === 0} onClick={() => setPage((value) => Math.max(0, value - 1))}>Newer entries</Button><Button tone="blue" disabled={safePage >= totalPages - 1} onClick={() => setPage((value) => Math.min(totalPages - 1, value + 1))}>Older entries</Button></div>
+      </div>
+    </div>
+  </Modal>
 }
 
 function Dashboard({ scoped, rentSummary, refreshRentSummary, setModal, setPage, setTenantTab, setTenantFilter, setRoomFloor, setFinanceTab, setPaymentFilter, setTicketFilter }: { scoped: ReturnType<typeof branchData>; rentSummary: RentCollectionSummary | null; refreshRentSummary: () => void; setModal: (value: string) => void; setPage: (page: Page) => void; setTenantTab: (value: 'Active' | 'Left PG') => void; setTenantFilter: (value: string) => void; setRoomFloor: (value: string) => void; setFinanceTab: (value: string) => void; setPaymentFilter: (value: string) => void; setTicketFilter: (value: string) => void }) {
@@ -1151,7 +1187,7 @@ function Dashboard({ scoped, rentSummary, refreshRentSummary, setModal, setPage,
         <Card><button className="w-full text-left" onClick={() => { setTenantTab('Active'); setTenantFilter('Vacating Notice'); setPage('Tenants') }}><h2 className="mb-4 text-lg font-bold">Vacating This Month</h2><div className="grid gap-2">{vacating.length ? vacating.map((tenant) => { const overdue = tenant.notice?.expectedLeavingDate && today >= tenant.notice.expectedLeavingDate; return <div key={tenant.id} className={`rounded-md p-3 text-sm ${overdue ? 'bg-rose-100 text-rose-800' : 'bg-orange-50'}`}><b>{tenant.name}</b><br />Leaving {formatDate(tenant.notice?.expectedLeavingDate)}{overdue && <span className="ml-2 font-bold">(OVERDUE)</span>}</div> }) : <p className="text-sm text-slate-500">No vacating notices for this month.</p>}</div></button></Card>
         <Card><h2 className="mb-4 text-lg font-bold">Alerts</h2><div className="grid gap-2">{alerts.slice(0, 5).map((alert) => <button key={`${alert.type}-${alert.text}`} onClick={() => { if (alert.type === 'maintenance') { setTicketFilter('Active'); setPage('Maintenance') } else if (alert.type === 'vacating') { setTenantTab('Active'); setTenantFilter('Vacating Notice'); setPage('Tenants') } else if (alert.type === 'vacateDue') { setTenantTab('Active'); setTenantFilter('Vacate Due'); setPage('Tenants') } else { setPaymentFilter(alert.text.includes('overdue') ? 'Overdue' : 'All'); setPage('Payments') } }} className="rounded-md bg-rose-50 p-3 text-left text-sm text-rose-800">{alert.text}</button>)}<Button tone="soft" onClick={() => setModal('notifications')}><Bell size={16} /> View all alerts</Button></div></Card>
       </div>
-      <Card><h2 className="mb-4 text-lg font-bold">Recent Activities</h2><div className="grid gap-2 md:grid-cols-2">{scoped.activityLogs.slice(0, 6).map((log) => <div key={log.id} className="rounded-md bg-slate-50 p-3 text-sm"><div className="flex flex-wrap justify-between gap-2"><b>{log.actionType}</b><span className="text-xs text-slate-400">{formatDateTime(log.at)}</span></div><p className="mt-1 text-slate-600">{log.description}</p></div>)}{!scoped.activityLogs.length && <p className="text-sm text-slate-500">No recent activity.</p>}</div></Card>
+      <Card><div className="mb-4 flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-bold">Recent Activities</h2><p className="text-xs text-slate-500">Latest 6 entries shown · history retained for 30 days</p></div><Button tone="soft" onClick={() => setModal('activityHistory')}><History size={16} /> View previous activity</Button></div><div className="grid gap-2 md:grid-cols-2">{scoped.activityLogs.slice(0, 6).map((log) => <div key={log.id} className="rounded-md bg-slate-50 p-3 text-sm"><div className="flex flex-wrap justify-between gap-2"><b>{log.actionType}</b><span className="text-xs text-slate-400">{formatDateTime(log.at)}</span></div><p className="mt-1 text-slate-600">{log.description}</p></div>)}{!scoped.activityLogs.length && <p className="text-sm text-slate-500">No recent activity.</p>}</div></Card>
     </div>
   )
 }

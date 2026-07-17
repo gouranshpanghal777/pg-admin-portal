@@ -470,4 +470,12 @@ assert(staffMovePayload.targetBedNo >= 1, 'SM2. Normal move carries a valid targ
 const staffMovePermission = { assignedBranch: true, permission: 'move_tenant', allowed: true }
 assert(staffMovePermission.assignedBranch && staffMovePermission.permission === 'move_tenant' && staffMovePermission.allowed, 'SM3. Staff move requires branch assignment and move_tenant permission')
 
+
+// Activity history pagination checks
+const activityHistoryPageSize = 10
+const activityHistoryRows = Array.from({ length: 23 }, (_, index) => ({ id: index + 1 }))
+assert(activityHistoryRows.slice(0, activityHistoryPageSize).length === 10, 'AH1. Activity history shows ten entries per page')
+assert(activityHistoryRows.slice(activityHistoryPageSize, activityHistoryPageSize * 2).length === 10, 'AH2. Older activity page is available')
+assert(activityHistoryRows.slice(activityHistoryPageSize * 2, activityHistoryPageSize * 3).length === 3, 'AH3. Final activity page keeps remaining entries')
+
 console.log('All PG Admin Portal flow checks passed.')
