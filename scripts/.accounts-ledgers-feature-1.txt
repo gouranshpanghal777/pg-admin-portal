@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+import subprocess
+import textwrap
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+APP = ROOT / "src/App.tsx"
+DB = ROOT / "src/lib/database.ts"
+TEST = ROOT / "scripts/self-test.mjs"
+FEATURE = ROOT / "src/features/accountsLedgers.tsx"
+MIGRATION = ROOT / "supabase/migrations/202607170002_accounts_ledgers.sql"
+SELF = Path(__file__).resolve()
+BACKUP_BRANCH = "backup-before-accounts-ledgers-2026-07-17"
+ALLOWED_UNTRACKED = {
+    "qa-smoke-report.md",
+    "scripts/qa-smoke-test.mjs",
+    "farukhnagar-ledger-audit.json",
+}
+
+
+def run(*args: str) -> None:
+    print("\n$", " ".join(args), flush=True)
+    subprocess.run(args, cwd=ROOT, check=True)
+
+
+def replace_once(text: str, old: str, new: str, label: str) -> str:
+    count = text.count(old)
+    if count != 1:
+        raise RuntimeError(f"{label}: expected exactly one match, found {count}")
+    return text.replace(old, new, 1)
+
+
+status = subprocess.run(
+    ["git", "status", "--porcelain"],
+    cwd=ROOT,
+    check=True,
+    capture_output=True,
+    text=True,
+).stdout.splitlines()
+blockers = [
+    line for line in status
+    if not (line.startswith("?? ") and line[3:] in ALLOWED_UNTRACKED)
+]
+if blockers:
+    raise SystemExit("Working tree has unrelated changes:\n" + "\n".join(blockers))
+
+for path in (FEATURE, MIGRATION):
+    if path.exists():
+        raise SystemExit(f"Target already exists: {path.relative_to(ROOT)}")
+
+subprocess.run(["git", "branch", BACKUP_BRANCH, "HEAD"], cwd=ROOT, check=False)
+run("git", "push", "origin", f"HEAD:refs/heads/{BACKUP_BRANCH}")
+
+original_app = APP.read_text()
+original_db = DB.read_text()
+original_test = TEST.read_text()
+app = original_app
+db = original_db
+test = original_test
+db_pushed = False
+
+app = replace_once(
+    app,
+    "import type { RentCollectionSummary } from './lib/database'\n",
+    "import type { RentCollectionSummary } from './lib/database'\nimport { AccountsLedgersPanel, UnifiedLedgerEntryModal, applyLedgerEntry } from './features/accountsLedgers'\n",
+    "accounts ledger import",
+)
+
+ledger_types = """export type LedgerPartyType = 'Staff' | 'Vendor' | 'Building Rent' | 'Other'
+export type LedgerPartyStatus = 'Active' | 'Left' | 'Inactive'
+export type LedgerParty = {
+  id: string
+  branchId: string
+  categoryId?: string
+  name: string
+  type: LedgerPartyType
+  phone?: string
+  joiningDate: string
+  monthlyAmount: number
+  dueDay: number
+  status: LedgerPartyStatus
+  leftDate?: string
+  notes?: string
+}
+export type LedgerEntry = {
+  id: string
+  branchId: string
+  partyId: string
+  categoryId?: string
+  nature: string
+  amount: number
+  debitAmount: number
+  creditAmount: number
+  date: string
+  period: string
+  description: string
+  paymentMode?: string
+  reference?: string
+  remarks?: string
+  cashbookId?: string
+  expenseId?: string
+  createdAt?: string
+}
+
+"""
+app = replace_once(app, "export type Branch = {", ledger_types + "export type Branch = {", "ledger types")
+
+app = replace_once(
+    app,
+    "  categories: Category[]\n}",
+    "  categories: Category[]\n  ledgerParties: LedgerParty[]\n  ledgerEntries: LedgerEntry[]\n}",
+    "AppData ledger arrays",
+)
+
+app = replace_once(
+    app,
+    "const emptyAppData = (): AppData => ({ branches: [], users: [], tenants: [], rooms: [], payments: [], cashbook: [], expenses: [], inventory: [], purchases: [], tickets: [], invoices: [], activityLogs: [], obligations: [], securityLedger: [], advances: [], categories: [] })",
+    "const emptyAppData = (): AppData => ({ branches: [], users: [], tenants: [], rooms: [], payments: [], cashbook: [], expenses: [], inventory: [], purchases: [], tickets: [], invoices: [], activityLogs: [], obligations: [], securityLedger: [], advances: [], categories: [], ledgerParties: [], ledgerEntries: [] })",
+    "empty AppData",
+)
+
+app = replace_once(
+    app,
+    "  const advances = data.advances.filter((item) => item.branchId === branchId)\n  const cashbook =",
+    "  const advances = data.advances.filter((item) => item.branchId === branchId)\n  const ledgerParties = data.ledgerParties.filter((item) => item.branchId === branchId)\n  const ledgerEntries = data.ledgerEntries.filter((item) => item.branchId === branchId)\n  const cashbook =",
+    "branch ledger filtering",
+)
+
+app = replace_once(
+    app,
+    "    advances,\n    rentStates,",
+    "    advances,\n    ledgerParties,\n    ledgerEntries,\n    rentStates,",
+    "branch ledger return",
+)
+
+app = replace_once(
+    app,
+    "    ...scoped.cashbook.map((entry) => `${entry.description} ${entry.category} ${entry.reference} ${entry.amount}`),\n",
+    "    ...scoped.cashbook.map((entry) => `${entry.description} ${entry.category} ${entry.reference} ${entry.amount}`),\n    ...scoped.ledgerParties.map((party) => `${party.name} ${party.type} ${party.phone || ''} ${data.categories.find((category) => category.id === party.categoryId)?.name || ''}`),\n",
+    "global ledger search",
+)
+
+app = replace_once(
+    app,
+    "{can('add_cashbook') && <Button tone=\"green\" onCl
