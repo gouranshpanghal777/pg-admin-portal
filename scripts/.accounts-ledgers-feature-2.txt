@@ -1,0 +1,85 @@
+ick={() => openModal('cashbook')}><Plus size={18} /> <span className=\"hidden sm:inline\">Add Entry</span></Button>}",
+    "{(can('add_cashbook') || can('add_expense')) && <Button tone=\"green\" onClick={() => openModal('accountEntry')}><Plus size={18} /> <span className=\"hidden sm:inline\">Add Entry</span></Button>}",
+    "global unified Add Entry",
+)
+
+app = replace_once(
+    app,
+    "Tabs values={['Cashbook', 'Expenses', 'Bill Creator']}",
+    "Tabs values={['Cashbook', 'Expenses', 'Ledgers', 'Bill Creator']}",
+    "Finance ledger tab",
+)
+
+app = replace_once(
+    app,
+    "{financeTab === 'Cashbook' && <><div className=\"no-print flex flex-wrap items-end gap-3\"><div className=\"max-w-xs\">",
+    "{financeTab === 'Cashbook' && <><div className=\"no-print flex flex-wrap items-end gap-3\"><Button tone=\"green\" onClick={() => setModal('cashbook')}><Plus size={16} /> Advanced Cashbook Entry</Button><div className=\"max-w-xs\">",
+    "advanced cashbook access",
+)
+
+app = replace_once(
+    app,
+    "<Button tone=\"red\" onClick={() => setModal('expense')}><Plus size={16} /> Add Expense</Button>",
+    "<Button tone=\"green\" onClick={() => setModal('accountEntry')}><Plus size={16} /> Add Entry</Button>",
+    "Expenses unified Add Entry",
+)
+
+app = replace_once(
+    app,
+    "}{financeTab === 'Bill Creator' && <BillCreator",
+    "}{financeTab === 'Ledgers' && <AccountsLedgersPanel data={data} branch={branch} updateData={updateData} role={role} currentUser={currentUser} isAdmin={isAdmin} onAddEntry={() => setModal('accountEntry')} />}{financeTab === 'Bill Creator' && <BillCreator",
+    "ledger panel render",
+)
+
+app = replace_once(
+    app,
+    "onClick={() => { setSelectedCashbookId(entry.id); setModal('editCashbook') }}",
+    "onClick={() => { const linkedLedger = data.ledgerEntries.find((item) => item.cashbookId === entry.id); if (linkedLedger) { alert('Edit this transaction from the Ledgers tab so linked balances stay correct. Delete and re-add it there when a correction is needed.'); return } setSelectedCashbookId(entry.id); setModal('editCashbook') }}",
+    "protect linked ledger cashbook edits",
+)
+
+app = replace_once(
+    app,
+    "expenses: prev.expenses.map((e) => e.categoryId === id ? { ...e, categoryId: undefined } : e)",
+    "expenses: prev.expenses.map((e) => e.categoryId === id ? { ...e, categoryId: undefined } : e), ledgerParties: prev.ledgerParties.map((party) => party.categoryId === id ? { ...party, categoryId: undefined } : party), ledgerEntries: prev.ledgerEntries.map((entry) => entry.categoryId === id ? { ...entry, categoryId: undefined } : entry)",
+    "category delete ledger unlink",
+)
+
+account_modal = """      {modal === 'accountEntry' && <UnifiedLedgerEntryModal branch={branch} categories={data.categories.filter((category) => category.branchId === branchId)} parties={scoped.ledgerParties} onClose={closeModal} onSubmit={(entry) => {
+        const partyName = entry.newParty?.name || data.ledgerParties.find((party) => party.id === entry.partyId)?.name || 'General entry'
+        updateData(
+          (previous) => applyLedgerEntry(previous, branchId, entry),
+          'Add Ledger Entry',
+          'Accounts & Ledgers',
+          `${role} ${currentUser.name} added ${entry.nature} of ${money(entry.amount)} for ${partyName}.`,
+          { amount: entry.amount, nature: entry.nature },
+        )
+      }} />}
+"""
+app = replace_once(
+    app,
+    "      {modal === 'cashbook' && <CashbookModal",
+    account_modal + "      {modal === 'cashbook' && <CashbookModal",
+    "unified account modal",
+)
+
+# Database integration.
+db = replace_once(
+    db,
+    "const empty: AppData = { branches: [], users: [], tenants: [], rooms: [], payments: [], cashbook: [], expenses: [], inventory: [], purchases: [], tickets: [], invoices: [], activityLogs: [], obligations: [], securityLedger: [], advances: [], categories: [] }",
+    "const empty: AppData = { branches: [], users: [], tenants: [], rooms: [], payments: [], cashbook: [], expenses: [], inventory: [], purchases: [], tickets: [], invoices: [], activityLogs: [], obligations: [], securityLedger: [], advances: [], categories: [], ledgerParties: [], ledgerEntries: [] }",
+    "database empty data",
+)
+
+db = replace_once(
+    db,
+    "'tenant_advances', 'categories'] as const",
+    "'tenant_advances', 'categories', 'ledger_parties', 'ledger_entries'] as const",
+    "database table load list",
+)
+
+db = replace_once(
+    db,
+    "const [branches, profiles, staff, assignments, permissions, rooms, tenants, payments, cashbook, expenses, inventory, purchases, tickets, invoices, logs, obligations, securityLedger, advances, categories] = results.map((result) => result.data || [])",
+    "const [branches, profiles, staff, assignments, permissions, rooms, tenants, payments, cashbook, expenses, inventory, purchases, tickets, invoices, logs, obligations, securityLedger, advances, categories, ledgerParties, ledgerEntries] = results.map((result) => result.data || [])",
+    "database table d
