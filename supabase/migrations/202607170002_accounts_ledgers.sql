@@ -1,4 +1,4 @@
- Linked staff, vendor, supplier and building-rent ledgers.
+--  Linked staff, vendor, supplier and building-rent ledgers.
 -- Existing categories remain the source of classification; parties link by category_id.
 
 create table if not exists public.ledger_parties (
@@ -131,4 +131,13 @@ begin
   delete from public.cashbook_entries where id = p_cashbook_id;
 
   return jsonb_build_object(
-    'cashbook_id', p_cashbook_i
+    'cashbook_id', p_cashbook_id,
+    'linked_entity_deleted', 'ledger_entry'
+  );
+end;
+$$;
+
+revoke all on function public.delete_ledger_cashbook_entry(uuid) from public;
+grant execute on function public.delete_ledger_cashbook_entry(uuid) to authenticated;
+grant select, insert, update, delete on public.ledger_parties to authenticated;
+grant select, insert, update, delete on public.ledger_entries to authenticated;

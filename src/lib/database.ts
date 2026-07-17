@@ -2,12 +2,12 @@ import type { AppData } from '../App'
 import { importedRentPaidMonths } from '../data/farukhnagarRentRegister'
 import { supabase } from './supabase'
 
-const empty: AppData = { branches: [], users: [], tenants: [], rooms: [], payments: [], cashbook: [], expenses: [], inventory: [], purchases: [], tickets: [], invoices: [], activityLogs: [], obligations: [], securityLedger: [], advances: [], categories: [] }
+const empty: AppData = { branches: [], users: [], tenants: [], rooms: [], payments: [], cashbook: [], expenses: [], inventory: [], purchases: [], tickets: [], invoices: [], activityLogs: [], obligations: [], securityLedger: [], advances: [], categories: [], ledgerParties: [], ledgerEntries: [] }
 const num = (value: unknown) => Number(value || 0)
 const ACTIVITY_LOG_LIMIT = 1000
 
 export async function loadAppData(): Promise<AppData> {
-  const tables = ['branches', 'profiles', 'staff_members', 'branch_assignments', 'staff_permissions', 'rooms', 'tenants', 'payments', 'cashbook_entries', 'expenses', 'inventory_items', 'inventory_purchases', 'maintenance_tickets', 'invoices', 'activity_logs', 'payment_obligations', 'security_ledger', 'tenant_advances', 'categories'] as const
+  const tables = ['branches', 'profiles', 'staff_members', 'branch_assignments', 'staff_permissions', 'rooms', 'tenants', 'payments', 'cashbook_entries', 'expenses', 'inventory_items', 'inventory_purchases', 'maintenance_tickets', 'invoices', 'activity_logs', 'payment_obligations', 'security_ledger', 'tenant_advances', 'categories', 'ledger_parties', 'ledger_entries'] as const
   const results = await Promise.all(tables.map((table) =>
     table === 'activity_logs'
       ? supabase.from(table).select('*').order('created_at', { ascending: false }).limit(ACTIVITY_LOG_LIMIT)
@@ -15,7 +15,7 @@ export async function loadAppData(): Promise<AppData> {
   ))
   const failed = results.find((result) => result.error)
   if (failed?.error) throw failed.error
-  const [branches, profiles, staff, assignments, permissions, rooms, tenants, payments, cashbook, expenses, inventory, purchases, tickets, invoices, logs, obligations, securityLedger, advances, categories] = results.map((result) => result.data || [])
+  const [branches, profiles, staff, assignments, permissions, rooms, tenants, payments, cashbook, expenses, inventory, purchases, tickets, invoices, logs, obligations, securityLedger, advances, categories, ledgerParties, ledgerEntries] = results.map((result) => result.data || [])
   const staffById = new Map(staff.map((row) => [row.id, row]))
   return {
     ...empty,
@@ -35,6 +35,8 @@ export async function loadAppData(): Promise<AppData> {
     securityLedger: securityLedger.map((r) => ({ id: r.id, branchId: r.branch_id, tenantId: r.tenant_id, type: r.movement_type, amount: num(r.amount), date: r.movement_date, reason: r.reason })),
     advances: advances.map((r) => ({ id: r.id, branchId: r.branch_id, tenantId: r.tenant_id, type: r.movement_type, amount: num(r.amount), date: r.movement_date, period: r.period, description: r.description })),
     categories: categories.map((r) => ({ id: r.id, branchId: r.branch_id, name: r.name })),
+    ledgerParties: ledgerParties.map((r) => ({ id: r.id, branchId: r.branch_id, categoryId: r.category_id || undefined, name: r.name, type: r.party_type, phone: r.phone || '', joiningDate: r.joining_date, monthlyAmount: num(r.monthly_amount), dueDay: num(r.due_day), status: r.status, leftDate: r.left_date || undefined, notes: r.notes || '' })),
+    ledgerEntries: ledgerEntries.map((r) => ({ id: r.id, branchId: r.branch_id, partyId: r.party_id, categoryId: r.category_id || undefined, nature: r.nature, amount: num(r.amount), debitAmount: num(r.debit_amount), creditAmount: num(r.credit_amount), date: r.entry_date, period: r.period, description: r.description || '', paymentMode: r.payment_mode || undefined, reference: r.reference || undefined, remarks: r.remarks || undefined, cashbookId: r.cashbook_entry_id || undefined, expenseId: r.expense_id || undefined, createdAt: r.created_at })),
   } as AppData
 }
 
@@ -52,6 +54,8 @@ const rows = {
   cashbook: (r: any, userId: string) => ({ id: r.id, branch_id: r.branchId, type: r.type, amount: r.amount, description: r.description, entry_date: r.date, source: r.source, linked_id: r.linkedId || null, category: r.category || 'Uncategorized', category_id: r.categoryId || null, payment_mode: r.paymentMode || 'Cash', reference: r.reference || null, remarks: r.remarks || null, created_at: r.createdAt, created_by: userId, updated_by: userId }),
   expenses: (r: any, userId: string) => ({ id: r.id, branch_id: r.branchId, category: r.category, category_id: r.categoryId || null, description: r.description, amount: r.amount, expense_date: r.date, vendor: r.vendor || null, cashbook_entry_id: r.cashbookId || null, maintenance_ticket_id: r.ticketId || null, created_by: userId }),
   categories: (r: any, userId: string) => ({ id: r.id, branch_id: r.branchId, name: r.name, created_by: userId }),
+  ledgerParties: (r: any, userId: string) => ({ id: r.id, branch_id: r.branchId, category_id: r.categoryId || null, name: r.name, party_type: r.type, phone: r.phone || null, joining_date: r.joiningDate, monthly_amount: r.monthlyAmount || 0, due_day: r.dueDay || 1, status: r.status, left_date: r.leftDate || null, notes: r.notes || null, created_by: userId, updated_by: userId }),
+  ledgerEntries: (r: any, userId: string) => ({ id: r.id, branch_id: r.branchId, party_id: r.partyId, category_id: r.categoryId || null, nature: r.nature, amount: r.amount, debit_amount: r.debitAmount || 0, credit_amount: r.creditAmount || 0, entry_date: r.date, period: r.period, description: r.description || null, payment_mode: r.paymentMode || null, reference: r.reference || null, remarks: r.remarks || null, cashbook_entry_id: r.cashbookId || null, expense_id: r.expenseId || null, created_at: r.createdAt, created_by: userId }),
   inventory: (r: any, userId: string) => ({ id: r.id, branch_id: r.branchId, name: r.name, category: r.category, stock: r.stock, unit: r.unit, reorder_at: r.reorderAt, last_purchase: r.lastPurchase || null, created_by: userId, updated_by: userId }),
   purchases: (r: any, userId: string) => ({ id: r.id, branch_id: r.branchId, item_id: r.itemId, quantity: r.quantity, unit_cost: r.unitCost, purchase_date: r.date, note: r.note || null, expense_id: r.expenseId || null, cashbook_entry_id: r.cashbookId || null, created_by: userId }),
   tickets: (r: any, userId: string) => ({ id: r.id, branch_id: r.branchId, title: r.title, status: r.status, room_id: r.roomId, tenant_id: r.tenantId || null, category: r.category, priority: r.priority, raised_date: r.raisedDate, assigned_to: r.assignedTo || null, description: r.description || null, resolution: r.resolution || null, created_by: userId, updated_by: userId }),
@@ -59,7 +63,7 @@ const rows = {
   activityLogs: (r: any) => ({ id: r.id, branch_id: r.branchId || null, branch_name: r.branchName, user_id: r.userId, user_name: r.userName, user_role: r.role.toLowerCase(), module: r.module, action_type: r.actionType, description: r.description, metadata: r.metadata || {} }),
 }
 
-const tableNames: Record<string, string> = { cashbook: 'cashbook_entries', inventory: 'inventory_items', purchases: 'inventory_purchases', tickets: 'maintenance_tickets', activityLogs: 'activity_logs' }
+const tableNames: Record<string, string> = { cashbook: 'cashbook_entries', inventory: 'inventory_items', purchases: 'inventory_purchases', tickets: 'maintenance_tickets', activityLogs: 'activity_logs', ledgerParties: 'ledger_parties', ledgerEntries: 'ledger_entries' }
 
 const isTransientNetworkError = (error: { message?: string; code?: string }): boolean =>
   !error.code && /failed to fetch|networkerror|aborterror|the operation was aborted/i.test(error.message || '')
@@ -91,7 +95,7 @@ async function deleteWithRetry(table: string, ids: string[]): Promise<void> {
 }
 
 export async function persistAppData(before: AppData, after: AppData, userId: string): Promise<void> {
-  const order: Array<keyof typeof rows> = ['branches', 'rooms', 'tenants', 'invoices', 'payments', 'cashbook', 'expenses', 'categories', 'inventory', 'purchases', 'tickets', 'activityLogs']
+  const order: Array<keyof typeof rows> = ['branches', 'rooms', 'tenants', 'invoices', 'payments', 'cashbook', 'expenses', 'categories', 'ledgerParties', 'ledgerEntries', 'inventory', 'purchases', 'tickets', 'activityLogs']
   for (const key of order) {
     const oldItems = (before as any)[key] || []
     const newItems = (after as any)[key] || []
@@ -121,7 +125,7 @@ const AFFECTED_TABLES: Record<string, readonly string[]> = {
   edit_tenant: ['tenants', 'rooms', 'activity_logs', 'payment_obligations'] as const,
   vacate: ['tenants', 'rooms', 'cashbook_entries', 'activity_logs', 'payment_obligations', 'security_ledger'] as const,
   delete_tenant: ['tenants', 'payments', 'cashbook_entries', 'activity_logs', 'payment_obligations', 'security_ledger', 'tenant_advances'] as const,
-  delete_cashbook: ['cashbook_entries'] as const,
+  delete_cashbook: ['cashbook_entries', 'expenses', 'ledger_entries'] as const,
   swap: ['tenants', 'rooms'] as const,
 }
 
@@ -152,6 +156,8 @@ export async function refreshTables(tables: readonly string[], currentData: AppD
   if (r('inventory_purchases')) next.purchases = r('inventory_purchases').map((r: any) => ({ id: r.id, branchId: r.branch_id, itemId: r.item_id, quantity: num(r.quantity), unitCost: num(r.unit_cost), date: r.purchase_date, note: r.note || '', expenseId: r.expense_id || undefined, cashbookId: r.cashbook_entry_id || undefined }))
   if (r('maintenance_tickets')) next.tickets = r('maintenance_tickets').map((r: any) => ({ id: r.id, branchId: r.branch_id, title: r.title, status: r.status, roomId: r.room_id, tenantId: r.tenant_id || undefined, category: r.category, priority: r.priority, raisedDate: r.raised_date, assignedTo: r.assigned_to || '', description: r.description || '', ticketNumber: r.ticket_number || undefined, resolution: r.resolution || undefined }))
   if (r('categories')) next.categories = r('categories').map((r: any) => ({ id: r.id, branchId: r.branch_id, name: r.name }))
+  if (r('ledger_parties')) next.ledgerParties = r('ledger_parties').map((r: any) => ({ id: r.id, branchId: r.branch_id, categoryId: r.category_id || undefined, name: r.name, type: r.party_type, phone: r.phone || '', joiningDate: r.joining_date, monthlyAmount: num(r.monthly_amount), dueDay: num(r.due_day), status: r.status, leftDate: r.left_date || undefined, notes: r.notes || '' }))
+  if (r('ledger_entries')) next.ledgerEntries = r('ledger_entries').map((r: any) => ({ id: r.id, branchId: r.branch_id, partyId: r.party_id, categoryId: r.category_id || undefined, nature: r.nature, amount: num(r.amount), debitAmount: num(r.debit_amount), creditAmount: num(r.credit_amount), date: r.entry_date, period: r.period, description: r.description || '', paymentMode: r.payment_mode || undefined, reference: r.reference || undefined, remarks: r.remarks || undefined, cashbookId: r.cashbook_entry_id || undefined, expenseId: r.expense_id || undefined, createdAt: r.created_at }))
   if (r('branches')) next.branches = r('branches').map((r: any) => ({ id: r.id, name: r.name, address: r.address, active: r.active, floors: r.floors, notes: r.notes, contact: r.contact, maintenanceToken: r.maintenance_token }))
   if (r('profiles') || r('staff_members') || r('branch_assignments') || r('staff_permissions')) {
     const staffList = r('staff_members') || []
@@ -408,6 +414,14 @@ export async function deleteTenantWithPayments(tenantId: string) {
 }
 
 export async function deleteCashbookEntryCascade(cashbookId: string) {
+  const { data: ledgerEntry, error: ledgerLookupError } = await supabase.from('ledger_entries').select('id').eq('cashbook_entry_id', cashbookId).maybeSingle()
+  if (ledgerLookupError) throw databaseError('load linked account ledger before delete', ledgerLookupError)
+  if (ledgerEntry) {
+    const { data, error } = await supabase.rpc('delete_ledger_cashbook_entry', { p_cashbook_id: cashbookId })
+    if (error) throw databaseError('delete_ledger_cashbook_entry RPC', error)
+    return data as { cashbook_id: string; linked_entity_deleted: string }
+  }
+
   const { data: entry, error: entryError } = await supabase.from('cashbook_entries').select('source, linked_id').eq('id', cashbookId).single()
   if (entryError) throw databaseError('load cashbook entry before delete', entryError)
   let rentTenantId: string | undefined

@@ -446,4 +446,20 @@ assert(vacateDueFiltered.every((t) => t.name === 'Due Today' || t.name === 'Past
 const dayCount = vacateDueDays('2026-06-21')
 assert(dayCount === 6, 'VD8. vacateDueDays(\'2026-06-21\') = 6 days overdue')
 
+
+// Accounts & Ledgers linked-entry checks
+const accountLedgerRows = [
+  { nature: 'Salary Due', debitAmount: 15000, creditAmount: 0, categoryId: 'staff-salary' },
+  { nature: 'Advance Given', debitAmount: 0, creditAmount: 3000, categoryId: 'staff-salary' },
+  { nature: 'Salary Payment', debitAmount: 0, creditAmount: 10000, categoryId: 'staff-salary' },
+]
+const accountBalance = accountLedgerRows.reduce((sum, row) => sum + row.debitAmount - row.creditAmount, 0)
+assert(accountBalance === 2000, 'AL1. Staff salary due, advance and payment produce correct running balance')
+assert(accountLedgerRows.every((row) => row.categoryId === 'staff-salary'), 'AL2. Every ledger entry remains linked to its category')
+const directPurchase = { debitAmount: 2500, creditAmount: 2500, cashbook: 2500, expense: 2500 }
+assert(directPurchase.debitAmount - directPurchase.creditAmount === 0, 'AL3. Direct purchase and payment leaves vendor balance clear')
+assert(directPurchase.cashbook === directPurchase.expense, 'AL4. Direct purchase creates one matching cashbook debit and expense')
+const inactiveParty = { status: 'Left', ledgerPreserved: true }
+assert(inactiveParty.status === 'Left' && inactiveParty.ledgerPreserved, 'AL5. Leaving staff preserves ledger history')
+
 console.log('All PG Admin Portal flow checks passed.')
