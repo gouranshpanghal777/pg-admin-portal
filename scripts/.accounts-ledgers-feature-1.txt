@@ -11,6 +11,7 @@ FEATURE = ROOT / "src/features/accountsLedgers.tsx"
 MIGRATION = ROOT / "supabase/migrations/202607170002_accounts_ledgers.sql"
 SELF = Path(__file__).resolve()
 BACKUP_BRANCH = "backup-before-accounts-ledgers-2026-07-17"
+BACKUP_COMMIT = "3af6cdea1a6dfb76f1427367fad44a8f59454f83"
 ALLOWED_UNTRACKED = {
     "qa-smoke-report.md",
     "scripts/qa-smoke-test.mjs",
@@ -48,8 +49,8 @@ for path in (FEATURE, MIGRATION):
     if path.exists():
         raise SystemExit(f"Target already exists: {path.relative_to(ROOT)}")
 
-subprocess.run(["git", "branch", BACKUP_BRANCH, "HEAD"], cwd=ROOT, check=False)
-run("git", "push", "origin", f"HEAD:refs/heads/{BACKUP_BRANCH}")
+subprocess.run(["git", "branch", "-f", BACKUP_BRANCH, BACKUP_COMMIT], cwd=ROOT, check=True)
+run("git", "push", "origin", f"{BACKUP_COMMIT}:refs/heads/{BACKUP_BRANCH}")
 
 original_app = APP.read_text()
 original_db = DB.read_text()
