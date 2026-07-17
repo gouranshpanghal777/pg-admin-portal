@@ -35,31 +35,31 @@ test = replace_once(
     "ledger self-tests",
 )
 
-APP.write_text(app)
-DB.write_text(db)
-TEST.write_text(test)
-FEATURE.parent.mkdir(parents=True, exist_ok=True)
-FEATURE.write_text(textwrap.dedent(feature_code).lstrip())
-MIGRATION.write_text(textwrap.dedent(migration_sql).lstrip())
-
-checks = {
-    "App ledger arrays": "ledgerParties: LedgerParty[]",
-    "unified header entry": "openModal('accountEntry')",
-    "Finance ledger tab": "financeTab === 'Ledgers'",
-    "linked component": "AccountsLedgersPanel",
-    "database party table": "'ledger_parties'",
-    "database entry table": "'ledger_entries'",
-    "category-linked party": "categoryId: input.categoryId",
-    "single linked transaction": "One save only:",
-    "RLS": "ledger_parties_branch_access",
-    "linked delete RPC": "delete_ledger_cashbook_entry",
-}
-combined = app + db + feature_code + migration_sql + test
-for label, marker in checks.items():
-    if marker not in combined:
-        raise SystemExit(f"Preflight failed: {label} is missing.")
-
 try:
+    APP.write_text(app)
+    DB.write_text(db)
+    TEST.write_text(test)
+    FEATURE.parent.mkdir(parents=True, exist_ok=True)
+    FEATURE.write_text(textwrap.dedent(feature_code).lstrip())
+    MIGRATION.write_text(textwrap.dedent(migration_sql).lstrip())
+
+    checks = {
+        "App ledger arrays": "ledgerParties: LedgerParty[]",
+        "unified header entry": "openModal('accountEntry')",
+        "Finance ledger tab": "financeTab === 'Ledgers'",
+        "linked component": "AccountsLedgersPanel",
+        "database party table": "'ledger_parties'",
+        "database entry table": "'ledger_entries'",
+        "category-linked party": "categoryId: input.categoryId",
+        "single linked transaction": "One save only:",
+        "RLS": "ledger_parties_branch_access",
+        "linked delete RPC": "delete_ledger_cashbook_entry",
+    }
+    combined = app + db + feature_code + migration_sql + test
+    for label, marker in checks.items():
+        if marker not in combined:
+            raise SystemExit(f"Preflight failed: {label} is missing.")
+
     run("npm", "run", "self-test")
     run("npm", "run", "build")
     run("npm", "run", "lint")
@@ -95,14 +95,14 @@ try:
     run("git", "commit", "-m", "feat: add linked staff and vendor ledgers")
     run("git", "push", "origin", "main")
     print("\nAccounts & Ledgers is live. Backup branch: backup-before-accounts-ledgers-2026-07-17", flush=True)
-except Exception:
+except BaseException:
     if not db_pushed:
         APP.write_text(original_app)
         DB.write_text(original_db)
         TEST.write_text(original_test)
         FEATURE.unlink(missing_ok=True)
         MIGRATION.unlink(missing_ok=True)
-        print("\nFeature files were restored because the database migration did not complete.", flush=True)
+        print("\nFeature files were restored because installation did not complete.", flush=True)
     else:
         print("\nDatabase migration succeeded, but commit/push did not finish. Local feature files were kept for recovery.", flush=True)
     raise
