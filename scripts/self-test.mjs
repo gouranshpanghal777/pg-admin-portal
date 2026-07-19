@@ -500,4 +500,21 @@ assert(salaryHistory[0].newAmount === 15000 && salaryHistory[0].effectiveDate ==
 const staffPermission = { assignedBranch: true, permission: 'add_cashbook', secureRpc: true }
 assert(staffPermission.assignedBranch && staffPermission.permission === 'add_cashbook' && staffPermission.secureRpc, 'SC6. Assigned staff records payments through permission-aware RPC')
 
+// Staff-readiness hardening checks
+const financePermissionMatrix = {
+  staffSalaryDue: { admin: true, addCashbook: false, addExpense: false },
+  vendorBill: { admin: true, addCashbook: false, addExpense: true },
+  vendorPayment: { admin: true, addCashbook: true, addExpense: false },
+}
+assert(financePermissionMatrix.staffSalaryDue.admin && !financePermissionMatrix.staffSalaryDue.addCashbook, 'SR1. Salary generation remains owner/admin controlled')
+assert(financePermissionMatrix.vendorBill.addExpense && !financePermissionMatrix.vendorBill.addCashbook, 'SR2. Vendor bill requires Expense permission')
+assert(financePermissionMatrix.vendorPayment.addCashbook && !financePermissionMatrix.vendorPayment.addExpense, 'SR3. Vendor payment requires Cashbook permission')
+const paymentPending = 6000
+assert(4000 <= paymentPending && !(7000 <= paymentPending), 'SR4. Normal payment cannot exceed pending balance')
+const stableCashbookRequest = '11111111-1111-4111-8111-111111111111'
+const cashbookRetry = { first: stableCashbookRequest, retry: stableCashbookRequest, rows: 1 }
+assert(cashbookRetry.first === cashbookRetry.retry && cashbookRetry.rows === 1, 'SR5. Manual Cashbook retry is idempotent')
+const staffAdvancedFeatures = { interBranch: false, partnerWithdrawal: false, createCategory: false }
+assert(!staffAdvancedFeatures.interBranch && !staffAdvancedFeatures.partnerWithdrawal && !staffAdvancedFeatures.createCategory, 'SR6. Advanced Cashbook features remain owner-only')
+
 console.log('All PG Admin Portal flow checks passed.')

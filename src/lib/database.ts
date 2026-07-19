@@ -731,3 +731,30 @@ export async function recordCategoryAccountTransaction(input: {
   if (error) throw databaseError('record_category_account_transaction RPC', error)
   return data as { success: boolean; ledger_entry_id: string; cashbook_entry_id?: string; expense_id?: string }
 }
+export async function recordManualCashbookEntry(input: {
+  requestId: string
+  branchId: string
+  type: 'Credit' | 'Debit'
+  amount: number
+  description: string
+  date: string
+  category?: string
+  paymentMode?: string
+  reference?: string
+  remarks?: string
+}): Promise<{ success: boolean; cashbook_entry_id: string; duplicate?: boolean }> {
+  const { data, error } = await supabase.rpc('record_manual_cashbook_entry_v2', {
+    p_request_id: input.requestId,
+    p_branch_id: input.branchId,
+    p_type: input.type,
+    p_amount: input.amount,
+    p_description: input.description,
+    p_entry_date: input.date,
+    p_category: input.category || 'Uncategorized',
+    p_payment_mode: input.paymentMode || 'Cash',
+    p_reference: input.reference || null,
+    p_remarks: input.remarks || null,
+  })
+  if (error) throw databaseError('record_manual_cashbook_entry_v2 RPC', error)
+  return data as { success: boolean; cashbook_entry_id: string; duplicate?: boolean }
+}

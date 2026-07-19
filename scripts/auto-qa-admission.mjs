@@ -10,8 +10,10 @@
  * 6. Cleans up all test records
  */
 
-const SUPABASE_URL = 'https://jgurmuvshaqmwjypiqtl.supabase.co'
-const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpndXJtdXZzaGFxbXdqeXBpcXRsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI1NTEyMDIsImV4cCI6MjA5ODEyNzIwMn0.-BO_-w97ghJbmj4kUPM1M-rRaUe9cRYnbCg2zlB4dEw'
+const SUPABASE_URL = process.env.PG95_SUPABASE_URL || process.env.VITE_SUPABASE_URL
+const ANON_KEY = process.env.PG95_SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
+const ADMIN_EMAIL = process.env.PG95_ADMIN_EMAIL
+const ADMIN_PASSWORD = process.env.PG95_ADMIN_PASSWORD
 
 const headers = () => ({
   'Content-Type': 'application/json',
@@ -27,14 +29,6 @@ function assert(condition, message) {
   else { fail++; console.error(`  ✗ ${message}`) }
 }
 
-async function gql(operationName, query, variables) {
-  const res = await fetch(`${SUPABASE_URL.replace('/rest/v1/', '')}/graphql/v1`, {
-    method: 'POST',
-    headers: headers(),
-    body: JSON.stringify({ operationName, query, variables }),
-  })
-  return res.json()
-}
 
 async function rest(table, method, body, params = '') {
   const res = await fetch(`${SUPABASE_URL}/${table}?${params}`, {
@@ -71,10 +65,11 @@ async function signIn(email, password) {
 
 async function main() {
   console.log('\n=== Auto-QA: Admission Idempotency + Rent Summary ===\n')
+  if (!SUPABASE_URL || !ANON_KEY || !ADMIN_EMAIL || !ADMIN_PASSWORD) throw new Error('Set PG95_SUPABASE_URL, PG95_SUPABASE_ANON_KEY, PG95_ADMIN_EMAIL and PG95_ADMIN_PASSWORD before running this destructive-cleanup QA script.')
 
   // Sign in
   console.log('1. Signing in as admin...')
-  await signIn('admin@pg95.local', 'Admin@12345')
+  await signIn(ADMIN_EMAIL, ADMIN_PASSWORD)
   assert(true, 'Admin sign-in succeeded')
 
   // Get a test branch
@@ -88,7 +83,6 @@ async function main() {
   const roomId = rooms[0].id
 
   const stableRequestId = crypto.randomUUID()
-  const paymentRequestId = crypto.randomUUID()
   const testTenantName = `AUTO_QA_TENANT_${Date.now()}`
 
   console.log(`\n2. Admitting test tenant "${testTenantName}" (request_id: ${stableRequestId})...`)

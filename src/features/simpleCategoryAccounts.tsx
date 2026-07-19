@@ -28,10 +28,10 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   return <label className="grid gap-1 text-sm font-semibold text-slate-700">{label}{children}</label>
 }
 
-function accountActions(type: LedgerPartyType) {
-  if (type === 'Staff') return ['Salary Due', 'Salary Payment', 'Advance Given', 'Bonus', 'Deduction']
-  if (type === 'Vendor') return ['Add Bill', 'Payment Made']
-  if (type === 'Building Rent') return ['Rent Due', 'Rent Payment']
+function accountActions(type: LedgerPartyType, isAdmin: boolean, canAddCashbook: boolean, canAddExpense: boolean) {
+  if (type === 'Staff') return isAdmin ? ['Salary Due', 'Salary Payment', 'Advance Given', 'Bonus', 'Deduction'] : canAddCashbook ? ['Salary Payment', 'Advance Given'] : []
+  if (type === 'Vendor') return [...(canAddExpense ? ['Add Bill'] : []), ...(canAddCashbook ? ['Payment Made'] : [])]
+  if (type === 'Building Rent') return [...(isAdmin ? ['Rent Due'] : []), ...(canAddCashbook ? ['Rent Payment'] : [])]
   return []
 }
 
@@ -57,6 +57,9 @@ export function CategoryAccountEntryModal({
   categories,
   parties,
   entries,
+  isAdmin,
+  canAddCashbook,
+  canAddExpense,
   onClose,
   onSaved,
 }: {
@@ -64,14 +67,18 @@ export function CategoryAccountEntryModal({
   categories: Category[]
   parties: LedgerParty[]
   entries: LedgerEntry[]
+  isAdmin: boolean
+  canAddCashbook: boolean
+  canAddExpense: boolean
   onClose: () => void
   onSaved: (message: string) => Promise<void> | void
 }) {
-  const accounts = useMemo(() => visibleAccounts(parties), [parties])
+  const accounts = useMemo(() => visibleAccounts(parties).filter((party) => accountActions(party.type, isAdmin, canAddCashbook, canAddExpense).length > 0), [parties, isAdmin, canAddCashbook, canAddExpense])
   const [partyId, setPartyId] = useState(accounts[0]?.id || '')
   const account = accounts.find((item) => item.id === partyId)
   const category = categories.find((item) => item.id === account?.categoryId)
-  const actions = account ? accountActions(account.type) : []
+  const accountType = account?.type
+  const actions = accountType ? accountActions(accountType, isAdmin, canAddCashbook, canAddExpense) : []
   const [action, setAction] = useState(actions[0] || '')
   const [amount, setAmount] = useState('')
   const [entryDate, setEntryDate] = useState(today())
@@ -87,9 +94,9 @@ export function CategoryAccountEntryModal({
   }, [accounts, partyId])
 
   useEffect(() => {
-    const nextActions = account ? accountActions(account.type) : []
+    const nextActions = accountType ? accountActions(accountType, isAdmin, canAddCashbook, canAddExpense) : []
     setAction(nextActions[0] || '')
-  }, [account?.id, account?.type])
+  }, [accountType, isAdmin, canAddCashbook, canAddExpense])
 
   useEffect(() => {
     if ((action === 'Salary Due' || action === 'Rent Due') && account?.monthlyAmount) setAmount(String(account.monthlyAmount))
@@ -105,6 +112,7 @@ export function CategoryAccountEntryModal({
     if (!account || !action) return
     const numericAmount = Number(amount)
     if (!(numericAmount > 0)) { setError('Enter an amount greater than zero.'); return }
+    if (['Salary Payment', 'Payment Made', 'Rent Payment'].includes(action) && numericAmount > Math.max(0, balance)) { setError(`Payment cannot exceed current pending balance of ${money(Math.max(0, balance))}. Use Advance Given only when extra advance is intended.`); return }
     const form = new FormData(event.currentTarget)
     setSaving(true)
     setError('')
@@ -131,7 +139,7 @@ export function CategoryAccountEntryModal({
     }
   }
 
-  if (!accounts.length) return <Modal title={`Staff / Vendor Payments · ${branchName}`} onClose={onClose}><div className="grid gap-4"><p className="rounded-md bg-amber-50 p-4 text-sm text-amber-800">No category has been classified as Staff, Vendor or Building Rent yet. Open Finance → Expenses → open a category → Edit category account.</p><div className="flex justify-end"><button onClick={onClose} className="rounded-md border border-slate-300 px-4 py-2 font-bold">Close</button></div></div></Modal>
+  if (!accounts.length) return <Modal title={`Staff / Vendor Payments · ${branchName}`} onClose={onClose}><div className="grid gap-4"><p className="rounded-md bg-amber-50 p-4 text-sm text-amber-800">No permitted staff/vendor action is available. The owner should classify a category and enable the required Cashbook or Expense permission.</p><div className="flex justify-end"><button onClick={onClose} className="rounded-md border border-slate-300 px-4 py-2 font-bold">Close</button></div></div></Modal>
 
   return <Modal title={`Staff / Vendor Payments · ${branchName}`} onClose={onClose}>
     <form className="grid gap-4 md:grid-cols-2" onSubmit={submit}>
