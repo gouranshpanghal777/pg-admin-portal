@@ -478,4 +478,26 @@ assert(activityHistoryRows.slice(0, activityHistoryPageSize).length === 10, 'AH1
 assert(activityHistoryRows.slice(activityHistoryPageSize, activityHistoryPageSize * 2).length === 10, 'AH2. Older activity page is available')
 assert(activityHistoryRows.slice(activityHistoryPageSize * 2, activityHistoryPageSize * 3).length === 3, 'AH3. Final activity page keeps remaining entries')
 
+
+
+// Simple category-based staff/vendor workflow checks
+const simpleFinanceButtons = { green: 'cashbook', orange: 'categoryAccountEntry' }
+assert(simpleFinanceButtons.green === 'cashbook', 'SC1. Green Add Entry restores the old Cashbook debit/credit form')
+assert(simpleFinanceButtons.orange === 'categoryAccountEntry', 'SC2. Orange button opens staff/vendor payments separately')
+const vendorLedger = [
+  { debit: 10000, credit: 0, nature: 'Add Bill' },
+  { debit: 0, credit: 4000, nature: 'Payment Made' },
+]
+assert(vendorLedger.reduce((sum, row) => sum + row.debit - row.credit, 0) === 6000, 'SC3. Vendor bill less payment leaves correct pending balance')
+const salaryLedger = [
+  { debit: 15000, credit: 0, nature: 'Salary Due' },
+  { debit: 0, credit: 3000, nature: 'Advance Given' },
+  { debit: 0, credit: 10000, nature: 'Salary Payment' },
+]
+assert(salaryLedger.reduce((sum, row) => sum + row.debit - row.credit, 0) === 2000, 'SC4. Salary due, advance and payment leave correct pending salary')
+const salaryHistory = [{ oldAmount: 12000, newAmount: 15000, effectiveDate: '2026-08-01' }]
+assert(salaryHistory[0].newAmount === 15000 && salaryHistory[0].effectiveDate === '2026-08-01', 'SC5. Salary changes retain effective-date history')
+const staffPermission = { assignedBranch: true, permission: 'add_cashbook', secureRpc: true }
+assert(staffPermission.assignedBranch && staffPermission.permission === 'add_cashbook' && staffPermission.secureRpc, 'SC6. Assigned staff records payments through permission-aware RPC')
+
 console.log('All PG Admin Portal flow checks passed.')

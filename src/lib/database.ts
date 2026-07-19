@@ -638,3 +638,96 @@ export async function getBranchRentCollectionSummary(branchId: string): Promise<
     calculatedAt: String(row.calculated_at || ''),
   }
 }
+export type LedgerPartyChangeHistory = {
+  id: string
+  branchId: string
+  categoryId: string
+  partyId: string
+  effectiveDate: string
+  oldValue?: Record<string, unknown>
+  newValue: Record<string, unknown>
+  changedBy?: string
+  changedByName?: string
+  createdAt: string
+}
+
+export async function fetchLedgerPartyChangeHistory(categoryId: string, partyId?: string): Promise<LedgerPartyChangeHistory[]> {
+  let query = supabase
+    .from('ledger_party_change_history')
+    .select('id, branch_id, category_id, party_id, effective_date, old_value, new_value, changed_by, changed_by_name, created_at')
+    .eq('category_id', categoryId)
+    .order('created_at', { ascending: false })
+  if (partyId) query = query.eq('party_id', partyId)
+  const { data, error } = await query
+  if (error) throw databaseError('load ledger party change history', error)
+  return (data || []).map((row) => ({
+    id: String(row.id),
+    branchId: String(row.branch_id),
+    categoryId: String(row.category_id),
+    partyId: String(row.party_id),
+    effectiveDate: String(row.effective_date),
+    oldValue: row.old_value as Record<string, unknown> | undefined,
+    newValue: (row.new_value || {}) as Record<string, unknown>,
+    changedBy: row.changed_by ? String(row.changed_by) : undefined,
+    changedByName: row.changed_by_name ? String(row.changed_by_name) : undefined,
+    createdAt: String(row.created_at),
+  }))
+}
+
+export async function saveCategoryAccountParty(input: {
+  partyId?: string
+  categoryId: string
+  name: string
+  type: 'Staff' | 'Vendor' | 'Building Rent' | 'Other'
+  phone?: string
+  joiningDate: string
+  monthlyAmount: number
+  dueDay: number
+  status: 'Active' | 'Left' | 'Inactive'
+  effectiveDate: string
+  notes?: string
+}): Promise<{ success: boolean; party_id: string }> {
+  const { data, error } = await supabase.rpc('save_category_account_party', {
+    p_party_id: input.partyId || null,
+    p_category_id: input.categoryId,
+    p_name: input.name,
+    p_party_type: input.type,
+    p_phone: input.phone || null,
+    p_joining_date: input.joiningDate,
+    p_monthly_amount: input.monthlyAmount,
+    p_due_day: input.dueDay,
+    p_status: input.status,
+    p_effective_date: input.effectiveDate,
+    p_notes: input.notes || null,
+  })
+  if (error) throw databaseError('save_category_account_party RPC', error)
+  return data as { success: boolean; party_id: string }
+}
+
+export async function recordCategoryAccountTransaction(input: {
+  requestId: string
+  partyId: string
+  action: string
+  amount: number
+  entryDate: string
+  period: string
+  paymentMode?: string
+  description?: string
+  reference?: string
+  remarks?: string
+}): Promise<{ success: boolean; ledger_entry_id: string; cashbook_entry_id?: string; expense_id?: string }> {
+  const { data, error } = await supabase.rpc('record_category_account_transaction', {
+    p_request_id: input.requestId,
+    p_party_id: input.partyId,
+    p_action: input.action,
+    p_amount: input.amount,
+    p_entry_date: input.entryDate,
+    p_period: input.period,
+    p_payment_mode: input.paymentMode || null,
+    p_description: input.description || null,
+    p_reference: input.reference || null,
+    p_remarks: input.remarks || null,
+  })
+  if (error) throw databaseError('record_category_account_transaction RPC', error)
+  return data as { success: boolean; ledger_entry_id: string; cashbook_entry_id?: string; expense_id?: string }
+}
