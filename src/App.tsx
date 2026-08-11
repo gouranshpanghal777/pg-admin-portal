@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase, supabaseConfigured } from './lib/supabase'
@@ -43,24 +43,8 @@ import {
   Wrench,
   X,
 } from 'lucide-react'
-import {
-  Area,
-  AreaChart,
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Legend,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts'
-import jsPDF from 'jspdf'
-import autoTable from 'jspdf-autotable/es'
-import QRCode from 'qrcode'
+
+const DashboardChart = lazy(() => import('./features/DashboardChart'))
 
 export type Role = 'Admin' | 'Staff'
 type Page =
@@ -1178,17 +1162,21 @@ function Dashboard({ scoped, rentSummary, refreshRentSummary, setModal, setPage,
         <Metric icon={<CalendarClock />} label="Upcoming Due Rent" value={upcomingDue} tone="orange" onClick={() => setPage('Payments')} />
       </div>
       <div className="grid gap-4 xl:grid-cols-[1.5fr_1fr]">
-        <Card><h2 className="mb-4 text-lg font-bold">Revenue Overview</h2><div className="h-72"><ResponsiveContainer><BarChart data={months}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="month" /><YAxis /><Tooltip formatter={(value) => money(Number(value))} /><Legend /><Bar dataKey="collected" fill="#16a34a" radius={[4, 4, 0, 0]} /><Bar dataKey="expected" fill="#2563eb" radius={[4, 4, 0, 0]} /></BarChart></ResponsiveContainer></div></Card>
-        <Card><h2 className="mb-4 text-lg font-bold">Room Distribution</h2><div className="h-72"><ResponsiveContainer><PieChart><Pie data={roomDistribution} innerRadius={58} outerRadius={92} dataKey="value" label>{roomDistribution.map((_, index) => <Cell key={index} fill={['#2563eb', '#16a34a', '#f97316', '#8b5cf6'][index]} />)}</Pie><Tooltip /><Legend /></PieChart></ResponsiveContainer></div></Card>
+        <Suspense fallback={<ChartPlaceholder title="Revenue Overview" height="h-72" />}><DashboardChart kind="revenue" months={months} /></Suspense>
+        <Suspense fallback={<ChartPlaceholder title="Room Distribution" height="h-72" />}><DashboardChart kind="rooms" roomDistribution={roomDistribution} /></Suspense>
       </div>
       <div className="grid gap-4 xl:grid-cols-3">
-        <Card><h2 className="mb-4 text-lg font-bold">Occupancy Trend</h2><div className="h-48"><ResponsiveContainer><AreaChart data={months.map((item, index) => ({ month: item.month, occupancy: Math.min(100, scoped.occupancyRate - 12 + index * 3) }))}><XAxis dataKey="month" /><YAxis /><Tooltip /><Area dataKey="occupancy" fill="#bfdbfe" stroke="#2563eb" /></AreaChart></ResponsiveContainer></div></Card>
+        <Suspense fallback={<ChartPlaceholder title="Occupancy Trend" height="h-48" />}><DashboardChart kind="occupancy" months={months} occupancyRate={scoped.occupancyRate} /></Suspense>
         <Card><button className="w-full text-left" onClick={() => { setTenantTab('Active'); setTenantFilter('Vacating Notice'); setPage('Tenants') }}><h2 className="mb-4 text-lg font-bold">Vacating This Month</h2><div className="grid gap-2">{vacating.length ? vacating.map((tenant) => { const overdue = tenant.notice?.expectedLeavingDate && today >= tenant.notice.expectedLeavingDate; return <div key={tenant.id} className={`rounded-md p-3 text-sm ${overdue ? 'bg-rose-100 text-rose-800' : 'bg-orange-50'}`}><b>{tenant.name}</b><br />Leaving {formatDate(tenant.notice?.expectedLeavingDate)}{overdue && <span className="ml-2 font-bold">(OVERDUE)</span>}</div> }) : <p className="text-sm text-slate-500">No vacating notices for this month.</p>}</div></button></Card>
         <Card><h2 className="mb-4 text-lg font-bold">Alerts</h2><div className="grid gap-2">{alerts.slice(0, 5).map((alert) => <button key={`${alert.type}-${alert.text}`} onClick={() => { if (alert.type === 'maintenance') { setTicketFilter('Active'); setPage('Maintenance') } else if (alert.type === 'vacating') { setTenantTab('Active'); setTenantFilter('Vacating Notice'); setPage('Tenants') } else if (alert.type === 'vacateDue') { setTenantTab('Active'); setTenantFilter('Vacate Due'); setPage('Tenants') } else { setPaymentFilter(alert.text.includes('overdue') ? 'Overdue' : 'All'); setPage('Payments') } }} className="rounded-md bg-rose-50 p-3 text-left text-sm text-rose-800">{alert.text}</button>)}<Button tone="soft" onClick={() => setModal('notifications')}><Bell size={16} /> View all alerts</Button></div></Card>
       </div>
       <Card><div className="mb-4 flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-bold">Recent Activities</h2><p className="text-xs text-slate-500">Latest 6 entries shown · history retained for 30 days</p></div><Button tone="soft" onClick={() => setModal('activityHistory')}><History size={16} /> View previous activity</Button></div><div className="grid gap-2 md:grid-cols-2">{scoped.activityLogs.slice(0, 6).map((log) => <div key={log.id} className="rounded-md bg-slate-50 p-3 text-sm"><div className="flex flex-wrap justify-between gap-2"><b>{log.actionType}</b><span className="text-xs text-slate-400">{formatDateTime(log.at)}</span></div><p className="mt-1 text-slate-600">{log.description}</p></div>)}{!scoped.activityLogs.length && <p className="text-sm text-slate-500">No recent activity.</p>}</div></Card>
     </div>
   )
+}
+
+function ChartPlaceholder({ title, height }: { title: string; height: string }) {
+  return <Card><h2 className="mb-4 text-lg font-bold">{title}</h2><div className={`${height} animate-pulse rounded-md bg-slate-100`} /></Card>
 }
 
 function Metric({ icon, label, value, tone = 'blue', onClick }: { icon: ReactNode; label: string; value: ReactNode; tone?: 'blue' | 'red' | 'orange'; onClick?: () => void }) {
@@ -1321,11 +1309,20 @@ function FinancePage({ scoped, financeTab, setFinanceTab, data, branch, setModal
   const [showPdfForm, setShowPdfForm] = useState(false)
   const [pdfFromDate, setPdfFromDate] = useState('')
   const [pdfToDate, setPdfToDate] = useState('')
-  const downloadCashbookPdf = () => {
+  const downloadCashbookPdf = async () => {
     const from = pdfFromDate || '2000-01-01'
     const to = pdfToDate || '2099-12-31'
     const entries = scoped.cashbook.filter((e) => e.date >= from && e.date <= to).sort((a, b) => a.date.localeCompare(b.date) || (a.createdAt || '').localeCompare(b.createdAt || ''))
     if (!entries.length) { alert('No transactions found in the selected date range.'); return }
+    let pdfTools
+    try {
+      pdfTools = await Promise.all([import('jspdf'), import('jspdf-autotable/es')])
+    } catch (failure) {
+      console.error('PDF tools failed to load:', failure)
+      alert('PDF tools could not load. Check your connection and try again.')
+      return
+    }
+    const [{ default: jsPDF }, { default: autoTable }] = pdfTools
     const totalCredit = entries.filter((e) => e.type === 'Credit').reduce((s, e) => s + e.amount, 0)
     const totalDebit = entries.filter((e) => e.type === 'Debit').reduce((s, e) => s + e.amount, 0)
     const doc = new jsPDF('landscape', 'mm', 'a4')
@@ -2035,11 +2032,14 @@ function MaintenanceQRModal({ branch, onClose }: { branch: Branch; onClose: () =
 
   useEffect(() => {
     if (!canvasRef.current || !branch.maintenanceToken) return
-    QRCode.toCanvas(canvasRef.current, qrUrl, { width: 280, margin: 2, color: { dark: '#0f172a', light: '#ffffff' } }, (error) => {
-      if (!error && canvasRef.current) {
-        setQrDataUrl(canvasRef.current.toDataURL('image/png'))
-      }
-    })
+    let cancelled = false
+    import('qrcode').then(({ default: QRCode }) => {
+      if (cancelled || !canvasRef.current) return
+      QRCode.toCanvas(canvasRef.current, qrUrl, { width: 280, margin: 2, color: { dark: '#0f172a', light: '#ffffff' } }, (error) => {
+        if (!cancelled && !error && canvasRef.current) setQrDataUrl(canvasRef.current.toDataURL('image/png'))
+      })
+    }).catch((failure) => console.error('QR code tools failed to load:', failure))
+    return () => { cancelled = true }
   }, [branch.maintenanceToken, qrUrl])
 
   const handleDownload = useCallback(() => {
@@ -2156,15 +2156,12 @@ function FiveMonthRegisterModal({ data, scoped, branch, visibleBranches, onClose
     })
   }, [filterBranchTenants, firstMonth, lastMonth, statusFilter, roomFilter])
 
-  const getRoomNumber = (tenant: Tenant) => {
-    const room = filterBranchRooms.find((r) => r.id === tenant.roomId)
-    return room?.number || ''
-  }
+  const roomsById = useMemo(() => new Map(filterBranchRooms.map((room) => [room.id, room])), [filterBranchRooms])
 
   const sortedTenants = useMemo(() => {
     return [...relevantTenants].sort((a, b) => {
-      const numA = getRoomNumber(a)
-      const numB = getRoomNumber(b)
+      const numA = roomsById.get(a.roomId)?.number || ''
+      const numB = roomsById.get(b.roomId)?.number || ''
       const aMatch = numA.match(/^(\d+)/)
       const bMatch = numB.match(/^(\d+)/)
       if (aMatch && bMatch) {
@@ -2173,7 +2170,7 @@ function FiveMonthRegisterModal({ data, scoped, branch, visibleBranches, onClose
       }
       return numA.localeCompare(numB)
     })
-  }, [relevantTenants])
+  }, [relevantTenants, roomsById])
 
   const getMonthStatus = (tenant: Tenant, month: string): string => {
     const joinMonth = tenant.joiningDate.slice(0, 7)
@@ -2233,20 +2230,20 @@ function FiveMonthRegisterModal({ data, scoped, branch, visibleBranches, onClose
     return options
   }, [filterBranchRooms])
 
-  const generatePdf = useCallback(() => {
+  const generatePdf = async () => {
     setPdfStatus('Generating PDF...')
     const shortMonth = (m: string) => new Date(Number(m.slice(0,4)), Number(m.slice(5,7)) - 1, 1).toLocaleString('en-US', { month: 'short', year: 'numeric' }).replace(/\s+/g, '-')
     const filename = `PG95-${branch.name}-5-Month-Register-${shortMonth(firstMonth)}-to-${shortMonth(lastMonth)}.pdf`
-    let doc: any
     try {
-      doc = new jsPDF('landscape', 'mm', 'a4')
+      const [{ default: jsPDF }, { default: autoTable }] = await Promise.all([import('jspdf'), import('jspdf-autotable/es')])
+      const doc = new jsPDF('landscape', 'mm', 'a4')
       const pageWidth = doc.internal.pageSize.getWidth()
       const margin = 8
 
       const head = ['#', 'Room', 'Tenant', ...registerMonths.map(formatMonth), 'Monthly Rent', 'Balance', 'Mobile', 'Rent Due', 'Electricity', 'Security']
       const colWidths = [8, 10, 26, ...registerMonths.map(() => 18), 16, 18, 18, 14, 12, 16]
       const body = sortedTenants.map((tenant, index) => {
-        const room = filterBranchRooms.find((r) => r.id === tenant.roomId)
+        const room = roomsById.get(tenant.roomId)
         const rentState = scoped.rentStates.get(tenant.id)
         return [
           String(index + 1),
@@ -2310,7 +2307,7 @@ function FiveMonthRegisterModal({ data, scoped, branch, visibleBranches, onClose
       console.error('PDF generation failed:', e)
       setPdfStatus(`PDF failed: ${e.message || 'unknown error'}`)
     }
-  }, [sortedTenants, registerMonths, branch, reportEndMonth, firstMonth, lastMonth, statusFilter])
+  }
 
   return (
     <Modal title="5 Month Tenant Register" wide onClose={onClose}>
@@ -2358,7 +2355,7 @@ function FiveMonthRegisterModal({ data, scoped, branch, visibleBranches, onClose
               </thead>
               <tbody>
                 {sortedTenants.map((tenant, index) => {
-                  const room = filterBranchRooms.find((r) => r.id === tenant.roomId)
+                  const room = roomsById.get(tenant.roomId)
                   const rentState = scoped.rentStates.get(tenant.id)
                   return <tr key={tenant.id} className={`${index % 2 === 0 ? 'bg-white' : 'bg-slate-50'}`}>
                     <td className="p-2 text-slate-500 border-r border-b border-slate-500">{index + 1}</td>

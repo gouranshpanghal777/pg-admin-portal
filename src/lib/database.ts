@@ -1,5 +1,6 @@
 import type { AppData } from '../App'
 import { importedRentPaidMonths } from '../data/farukhnagarRentRegister'
+import { isTransientNetworkError, retryIdempotentRequest } from './network'
 import { supabase } from './supabase'
 
 const empty: AppData = { branches: [], users: [], tenants: [], rooms: [], payments: [], cashbook: [], expenses: [], inventory: [], purchases: [], tickets: [], invoices: [], activityLogs: [], obligations: [], securityLedger: [], advances: [], categories: [], ledgerParties: [], ledgerEntries: [] }
@@ -64,9 +65,6 @@ const rows = {
 }
 
 const tableNames: Record<string, string> = { cashbook: 'cashbook_entries', inventory: 'inventory_items', purchases: 'inventory_purchases', tickets: 'maintenance_tickets', activityLogs: 'activity_logs', ledgerParties: 'ledger_parties', ledgerEntries: 'ledger_entries' }
-
-const isTransientNetworkError = (error: { message?: string; code?: string }): boolean =>
-  !error.code && /failed to fetch|networkerror|aborterror|the operation was aborted/i.test(error.message || '')
 
 async function upsertWithRetry(table: string, rows: Record<string, unknown>[]): Promise<void> {
   const maxAttempts = 3
@@ -182,14 +180,14 @@ const normalizePaymentType = (value: unknown): 'Rent' | 'Security Deposit' | 'El
   return 'Rent'
 }
 
-const friendlyDbError = (error: { message?: string; code?: string }): string => {
+const friendlyDbError = (error: { name?: string; message?: string; code?: string; details?: string; hint?: string }): string => {
   const code = error.code || ''
   if (code === '42501') return 'You do not have permission to perform this action.'
   if (code === '23505') return 'This entry already exists.'
   if (code === '23503') return 'This record is referenced by other data and cannot be modified.'
   if (code === '22003') return 'The amount entered is invalid.'
   if (code === 'P0002') return 'The requested record was not found.'
-  if (/failed to fetch|load failed|networkerror|aborterror/i.test(error.message || '')) return 'The entry could not be confirmed. Please check your connection and try again.'
+  if (isTransientNetworkError(error)) return 'The connection was interrupted before the save could be confirmed. Your entry is protected from duplicates; please try Save again.'
   return error.message || 'Unable to save. Please try again.'
 }
 
@@ -213,11 +211,7 @@ export async function recordSplitPayment(input: { requestId: string; tenantId: s
     p_payment_mode: input.paymentMode,
     p_description: input.description || null,
   }
-  let response = await supabase.rpc('record_split_payment_v2', payload)
-  if (response.error && isTransientNetworkError(response.error)) {
-    await new Promise((resolve) => window.setTimeout(resolve, 400))
-    response = await supabase.rpc('record_split_payment_v2', payload)
-  }
+  const response = await retryIdempotentRequest(() => supabase.rpc('record_split_payment_v2', payload))
   const { data, error } = response
   if (error) throw databaseError('record_split_payment_v2 RPC', error)
   if (input.rentAmount > 0) await repairFutureRoutedRentPayment(input, requestStartedAt)
@@ -295,11 +289,6 @@ async function repairFutureRoutedRentPayment(input: { tenantId: string; branchId
   }
 }
 
-async function verifyAdmission(requestId: string): Promise<string | null> {
-  const { data } = await supabase.from('admission_requests').select('tenant_id').eq('request_id', requestId).maybeSingle()
-  return data?.tenant_id || null
-}
-
 export async function admitTenant(input: { requestId: string; branchId: string; name: string; phone: string; email: string; roomId: string; bedNo: number; joiningDate: string; dueDate: string; monthlyRent: number; security: number; electricity: string; electricityAmount: number; idProof: string }) {
   const payload = {
     p_request_id: input.requestId, p_branch_id: input.branchId, p_name: input.name,
@@ -309,21 +298,9 @@ export async function admitTenant(input: { requestId: string; branchId: string; 
     p_electricity: input.electricity, p_electricity_amount: input.electricityAmount,
     p_id_proof: input.idProof || '',
   }
-  const maxAttempts = 3
-  let lastError: unknown = null
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const response = await supabase.rpc('admit_tenant_v2', payload)
-    if (!response.error) return response.data as string
-    if (isTransientNetworkError(response.error)) {
-      lastError = response.error
-      if (attempt < maxAttempts) await new Promise((resolve) => window.setTimeout(resolve, 400 * attempt))
-      continue
-    }
-    throw databaseError('admit_tenant_v2 RPC', response.error)
-  }
-  const verified = await verifyAdmission(input.requestId)
-  if (verified) return verified
-  throw databaseError('admit_tenant_v2 RPC', lastError as { message?: string; code?: string })
+  const { data, error } = await retryIdempotentRequest(() => supabase.rpc('admit_tenant_v2', payload))
+  if (error) throw databaseError('admit_tenant_v2 RPC', error)
+  return data as string
 }
 
 export async function rejoinTenantWithObligation(input: {
@@ -716,7 +693,7 @@ export async function recordCategoryAccountTransaction(input: {
   reference?: string
   remarks?: string
 }): Promise<{ success: boolean; ledger_entry_id: string; cashbook_entry_id?: string; expense_id?: string }> {
-  const { data, error } = await supabase.rpc('record_category_account_transaction', {
+  const { data, error } = await retryIdempotentRequest(() => supabase.rpc('record_category_account_transaction', {
     p_request_id: input.requestId,
     p_party_id: input.partyId,
     p_action: input.action,
@@ -727,7 +704,7 @@ export async function recordCategoryAccountTransaction(input: {
     p_description: input.description || null,
     p_reference: input.reference || null,
     p_remarks: input.remarks || null,
-  })
+  }))
   if (error) throw databaseError('record_category_account_transaction RPC', error)
   return data as { success: boolean; ledger_entry_id: string; cashbook_entry_id?: string; expense_id?: string }
 }
@@ -743,7 +720,7 @@ export async function recordManualCashbookEntry(input: {
   reference?: string
   remarks?: string
 }): Promise<{ success: boolean; cashbook_entry_id: string; duplicate?: boolean }> {
-  const { data, error } = await supabase.rpc('record_manual_cashbook_entry_v2', {
+  const { data, error } = await retryIdempotentRequest(() => supabase.rpc('record_manual_cashbook_entry_v2', {
     p_request_id: input.requestId,
     p_branch_id: input.branchId,
     p_type: input.type,
@@ -754,7 +731,7 @@ export async function recordManualCashbookEntry(input: {
     p_payment_mode: input.paymentMode || 'Cash',
     p_reference: input.reference || null,
     p_remarks: input.remarks || null,
-  })
+  }))
   if (error) throw databaseError('record_manual_cashbook_entry_v2 RPC', error)
   return data as { success: boolean; cashbook_entry_id: string; duplicate?: boolean }
 }

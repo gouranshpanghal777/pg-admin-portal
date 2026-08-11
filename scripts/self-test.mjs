@@ -1,3 +1,5 @@
+import { isTransientNetworkError, retryIdempotentRequest } from '../src/lib/network.ts'
+
 const today = '2026-06-27'
 const uid = (prefix) => `${prefix}-${Math.random().toString(36).slice(2, 8)}`
 const daysUntil = (date) => Math.ceil((new Date(`${date}T00:00:00`) - new Date(`${today}T00:00:00`)) / 86400000)
@@ -269,11 +271,9 @@ assert(foodExpensesTotal === 300, '23. Category total is correct')
 
 // 24. Branch isolation
 const b2Entries = data.cashbook.filter((e) => e.branchId === otherBranch)
-const b1Food = data.cashbook.filter((e) => e.branchId === testBranch && e.category === 'Food')
 assert(!b2Entries.some((e) => e.category === 'Food'), '24. Branch isolation works')
 
 // 25-26. Newest-first ordering by createdAt
-const now = '2026-06-27T12:00:00Z'
 const older = { id: 'old-entry', branchId: testBranch, type: 'Credit', amount: 100, description: 'Older entry', date: '2026-06-27', source: 'Manual', category: 'Other', createdAt: '2026-06-27T08:00:00Z' }
 const newer = { id: 'new-entry', branchId: testBranch, type: 'Credit', amount: 200, description: 'Newer entry', date: '2026-06-27', source: 'Manual', category: 'Other', createdAt: '2026-06-27T09:00:00Z' }
 const newest = { id: 'nst-entry', branchId: testBranch, type: 'Credit', amount: 300, description: 'Newest entry', date: '2026-06-27', source: 'Manual', category: 'Other', createdAt: '2026-06-27T10:00:00Z' }
@@ -285,7 +285,7 @@ const survivingSorted = [...data.cashbook.filter((e) => !['old-entry', 'new-entr
 assert(survivingSorted.length === data.cashbook.length - 3, '26. Ordering survives reload (simulated)')
 
 // 27-30. Cashbook PDF date range - test the data shaping logic
-const pdfEntries = data.cashbook.filter((e) => e.date >= '2026-06-27' && e.date <= '2026-06-27').sort((a, b) => a.date.localeCompare(b.date) || (a.createdAt || '').localeCompare(b.createdAt || ''))
+const pdfEntries = data.cashbook.filter((e) => e.date === '2026-06-27').sort((a, b) => a.date.localeCompare(b.date) || (a.createdAt || '').localeCompare(b.createdAt || ''))
 const pdfCredits = pdfEntries.filter((e) => e.type === 'Credit').reduce((s, e) => s + e.amount, 0)
 const pdfDebits = pdfEntries.filter((e) => e.type === 'Debit').reduce((s, e) => s + e.amount, 0)
 assert(pdfEntries.length > 0, '27. Cashbook PDF date range is inclusive')
@@ -510,11 +510,28 @@ assert(financePermissionMatrix.staffSalaryDue.admin && !financePermissionMatrix.
 assert(financePermissionMatrix.vendorBill.addExpense && !financePermissionMatrix.vendorBill.addCashbook, 'SR2. Vendor bill requires Expense permission')
 assert(financePermissionMatrix.vendorPayment.addCashbook && !financePermissionMatrix.vendorPayment.addExpense, 'SR3. Vendor payment requires Cashbook permission')
 const paymentPending = 6000
-assert(4000 <= paymentPending && !(7000 <= paymentPending), 'SR4. Normal payment cannot exceed pending balance')
+assert(paymentPending >= 4000 && paymentPending < 7000, 'SR4. Normal payment cannot exceed pending balance')
 const stableCashbookRequest = '11111111-1111-4111-8111-111111111111'
 const cashbookRetry = { first: stableCashbookRequest, retry: stableCashbookRequest, rows: 1 }
 assert(cashbookRetry.first === cashbookRetry.retry && cashbookRetry.rows === 1, 'SR5. Manual Cashbook retry is idempotent')
 const staffAdvancedFeatures = { interBranch: false, partnerWithdrawal: false, createCategory: false }
 assert(!staffAdvancedFeatures.interBranch && !staffAdvancedFeatures.partnerWithdrawal && !staffAdvancedFeatures.createCategory, 'SR6. Advanced Cashbook features remain owner-only')
+
+assert(isTransientNetworkError({ message: 'Load failed' }), 'SR7. Safari Load failed response is treated as a transient network interruption')
+assert(!isTransientNetworkError({ code: '42501', message: 'permission denied' }), 'SR8. Database errors are not retried as network failures')
+let retryAttempts = 0
+const retriedSave = await retryIdempotentRequest(async () => {
+  retryAttempts += 1
+  return retryAttempts === 1
+    ? { data: null, error: { message: 'Load failed' } }
+    : { data: { saved: true }, error: null }
+}, { retryDelayMs: () => 0 })
+assert(retryAttempts === 2 && retriedSave.data?.saved === true, 'SR9. Idempotent save retries automatically after an interrupted response')
+let permanentFailureAttempts = 0
+await retryIdempotentRequest(async () => {
+  permanentFailureAttempts += 1
+  return { data: null, error: { code: '23505', message: 'duplicate key' } }
+}, { retryDelayMs: () => 0 })
+assert(permanentFailureAttempts === 1, 'SR10. Permanent database errors are returned without retrying')
 
 console.log('All PG Admin Portal flow checks passed.')
