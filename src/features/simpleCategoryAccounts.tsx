@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import { History, Plus, X } from 'lucide-react'
 import type { Category, LedgerEntry, LedgerParty, LedgerPartyStatus, LedgerPartyType } from '../App'
@@ -86,6 +86,7 @@ export function CategoryAccountEntryModal({
   const [paymentMode, setPaymentMode] = useState('Cash')
   const [requestId, setRequestId] = useState(() => crypto.randomUUID())
   const [saving, setSaving] = useState(false)
+  const savingRef = useRef(false)
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -109,11 +110,13 @@ export function CategoryAccountEntryModal({
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
+    if (savingRef.current) return
     if (!account || !action) return
     const numericAmount = Number(amount)
     if (!(numericAmount > 0)) { setError('Enter an amount greater than zero.'); return }
     if (['Salary Payment', 'Payment Made', 'Rent Payment'].includes(action) && numericAmount > Math.max(0, balance)) { setError(`Payment cannot exceed current pending balance of ${money(Math.max(0, balance))}. Use Advance Given only when extra advance is intended.`); return }
     const form = new FormData(event.currentTarget)
+    savingRef.current = true
     setSaving(true)
     setError('')
     try {
@@ -135,6 +138,7 @@ export function CategoryAccountEntryModal({
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Entry could not be saved.')
     } finally {
+      savingRef.current = false
       setSaving(false)
     }
   }
@@ -173,11 +177,14 @@ function PartyEditor({
 }) {
   const [type, setType] = useState<LedgerPartyType>(party?.type || 'Staff')
   const [saving, setSaving] = useState(false)
+  const savingRef = useRef(false)
   const [error, setError] = useState('')
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
+    if (savingRef.current) return
     const form = new FormData(event.currentTarget)
+    savingRef.current = true
     setSaving(true)
     setError('')
     try {
@@ -198,6 +205,7 @@ function PartyEditor({
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Account settings could not be saved.')
     } finally {
+      savingRef.current = false
       setSaving(false)
     }
   }
