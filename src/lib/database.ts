@@ -330,11 +330,6 @@ async function repairFutureRoutedRentPayment(input: { tenantId: string; branchId
   }
 }
 
-async function verifyAdmission(requestId: string): Promise<string | null> {
-  const { data } = await supabase.from('admission_requests').select('tenant_id').eq('request_id', requestId).maybeSingle()
-  return data?.tenant_id || null
-}
-
 export async function admitTenant(input: { requestId: string; branchId: string; name: string; phone: string; email: string; roomId: string; bedNo: number; joiningDate: string; dueDate: string; monthlyRent: number; security: number; electricity: string; electricityAmount: number; idProof: string }) {
   const payload = {
     p_request_id: input.requestId, p_branch_id: input.branchId, p_name: input.name,
@@ -356,8 +351,8 @@ export async function admitTenant(input: { requestId: string; branchId: string; 
     }
     throw databaseError('admit_tenant_v2 RPC', response.error)
   }
-  const verified = await verifyAdmission(input.requestId)
-  if (verified) return verified
+  // admission_requests is intentionally private. The same idempotency key is
+  // retained by the form so another submit safely replays the RPC.
   throw databaseError('admit_tenant_v2 RPC', lastError as { message?: string; code?: string })
 }
 
