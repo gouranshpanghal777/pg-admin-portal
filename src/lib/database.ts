@@ -249,8 +249,8 @@ export async function recordSplitPayment(input: { requestId: string; tenantId: s
     p_description: input.description || null,
   }
   let response = await supabase.rpc('record_split_payment_v2', payload)
-  if (response.error && isTransientNetworkError(response.error)) {
-    await new Promise((resolve) => window.setTimeout(resolve, 400))
+  for (let attempt = 2; response.error && isTransientNetworkError(response.error) && attempt <= 3; attempt += 1) {
+    await new Promise((resolve) => window.setTimeout(resolve, 400 * (attempt - 1)))
     response = await supabase.rpc('record_split_payment_v2', payload)
   }
   const { data, error } = response
@@ -751,7 +751,7 @@ export async function recordCategoryAccountTransaction(input: {
   reference?: string
   remarks?: string
 }): Promise<{ success: boolean; ledger_entry_id: string; cashbook_entry_id?: string; expense_id?: string }> {
-  const { data, error } = await supabase.rpc('record_category_account_transaction', {
+  const payload = {
     p_request_id: input.requestId,
     p_party_id: input.partyId,
     p_action: input.action,
@@ -762,7 +762,13 @@ export async function recordCategoryAccountTransaction(input: {
     p_description: input.description || null,
     p_reference: input.reference || null,
     p_remarks: input.remarks || null,
-  })
+  }
+  let response = await supabase.rpc('record_category_account_transaction', payload)
+  for (let attempt = 2; response.error && isTransientNetworkError(response.error) && attempt <= 3; attempt += 1) {
+    await new Promise((resolve) => window.setTimeout(resolve, 400 * (attempt - 1)))
+    response = await supabase.rpc('record_category_account_transaction', payload)
+  }
+  const { data, error } = response
   if (error) throw databaseError('record_category_account_transaction RPC', error)
   return data as { success: boolean; ledger_entry_id: string; cashbook_entry_id?: string; expense_id?: string }
 }
@@ -778,7 +784,7 @@ export async function recordManualCashbookEntry(input: {
   reference?: string
   remarks?: string
 }): Promise<{ success: boolean; cashbook_entry_id: string; duplicate?: boolean }> {
-  const { data, error } = await supabase.rpc('record_manual_cashbook_entry_v2', {
+  const payload = {
     p_request_id: input.requestId,
     p_branch_id: input.branchId,
     p_type: input.type,
@@ -789,7 +795,13 @@ export async function recordManualCashbookEntry(input: {
     p_payment_mode: input.paymentMode || 'Cash',
     p_reference: input.reference || null,
     p_remarks: input.remarks || null,
-  })
+  }
+  let response = await supabase.rpc('record_manual_cashbook_entry_v2', payload)
+  for (let attempt = 2; response.error && isTransientNetworkError(response.error) && attempt <= 3; attempt += 1) {
+    await new Promise((resolve) => window.setTimeout(resolve, 400 * (attempt - 1)))
+    response = await supabase.rpc('record_manual_cashbook_entry_v2', payload)
+  }
+  const { data, error } = response
   if (error) throw databaseError('record_manual_cashbook_entry_v2 RPC', error)
   return data as { success: boolean; cashbook_entry_id: string; duplicate?: boolean }
 }
