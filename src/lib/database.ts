@@ -1,23 +1,55 @@
 import type { AppData } from '../App'
 import { importedRentPaidMonths } from '../data/farukhnagarRentRegister'
 import { supabase } from './supabase'
+import { businessDate } from './businessDate'
+import type { RentRpcLine } from './tenantAccount'
 
 const empty: AppData = { branches: [], users: [], tenants: [], rooms: [], payments: [], cashbook: [], expenses: [], inventory: [], purchases: [], tickets: [], invoices: [], activityLogs: [], obligations: [], securityLedger: [], advances: [], categories: [], ledgerParties: [], ledgerEntries: [] }
 const num = (value: unknown) => Number(value || 0)
 const ACTIVITY_LOG_LIMIT = 1000
+
+/** PostgREST defaults to a page limit. Never silently truncate a financial ledger at 1000 rows. */
+async function selectAll(table: string) {
+  const all: Record<string, any>[] = []
+  const pageSize = 500
+  for (let offset = 0; ; offset += pageSize) {
+    let query = supabase.from(table).select('*')
+    const order = table === 'branch_assignments' ? ['user_id', 'branch_id'] : table === 'staff_permissions' ? ['user_id', 'permission'] : ['id']
+    for (const column of order) query = query.order(column)
+    const { data, error } = await query.range(offset, offset + pageSize - 1)
+    if (error) return { data: null, error }
+    all.push(...(data || []))
+    if (!data || data.length < pageSize) return { data: all, error: null }
+  }
+}
+
+export async function getBranchRentBreakdown(branchId: string, asOfDate = businessDate()): Promise<RentRpcLine[]> {
+  const { data, error } = await supabase.rpc('get_branch_rent_breakdown', { p_branch_id: branchId, p_as_of_date: asOfDate })
+  if (error) throw databaseError('get_branch_rent_breakdown', error)
+  if (!Array.isArray(data)) throw new Error('Rent breakdown returned an invalid response; balances cannot be confirmed.')
+  return data as RentRpcLine[]
+}
+
+async function attachRentSnapshots(data: AppData): Promise<AppData> {
+  const asOfDate = businessDate()
+  const byTenant = new Map<string, RentRpcLine[]>()
+  const branchRows = await Promise.all(data.branches.map((branch) => getBranchRentBreakdown(branch.id, asOfDate)))
+  for (const rows of branchRows) for (const row of rows) byTenant.set(row.tenant_id, [...(byTenant.get(row.tenant_id) || []), row])
+  return { ...data, tenants: data.tenants.map((tenant) => ({ ...tenant, rentSnapshot: tenant.status === 'Left' ? undefined : { asOfDate, lines: byTenant.get(tenant.id) || [] } })) }
+}
 
 export async function loadAppData(): Promise<AppData> {
   const tables = ['branches', 'profiles', 'staff_members', 'branch_assignments', 'staff_permissions', 'rooms', 'tenants', 'payments', 'cashbook_entries', 'expenses', 'inventory_items', 'inventory_purchases', 'maintenance_tickets', 'invoices', 'activity_logs', 'payment_obligations', 'security_ledger', 'tenant_advances', 'categories', 'ledger_parties', 'ledger_entries'] as const
   const results = await Promise.all(tables.map((table) =>
     table === 'activity_logs'
       ? supabase.from(table).select('*').order('created_at', { ascending: false }).limit(ACTIVITY_LOG_LIMIT)
-      : supabase.from(table).select('*')
+      : selectAll(table)
   ))
   const failed = results.find((result) => result.error)
   if (failed?.error) throw failed.error
   const [branches, profiles, staff, assignments, permissions, rooms, tenants, payments, cashbook, expenses, inventory, purchases, tickets, invoices, logs, obligations, securityLedger, advances, categories, ledgerParties, ledgerEntries] = results.map((result) => result.data || [])
   const staffById = new Map(staff.map((row) => [row.id, row]))
-  return {
+  const mapped = {
     ...empty,
     branches: branches.map((r) => ({ id: r.id, name: r.name, address: r.address, active: r.active, floors: r.floors, notes: r.notes, contact: r.contact, maintenanceToken: r.maintenance_token })),
     users: profiles.map((r) => { const s = staffById.get(r.id); return { id: r.id, name: r.name, phone: r.phone || '', role: r.role === 'admin' ? 'Admin' : 'Staff', active: r.active, email: s?.email || '', username: s?.username || '', branchIds: assignments.filter((a) => a.user_id === r.id).map((a) => a.branch_id), permissions: permissions.filter((p) => p.user_id === r.id && p.allowed).map((p) => p.permission) } }),
@@ -38,6 +70,7 @@ export async function loadAppData(): Promise<AppData> {
     ledgerParties: ledgerParties.map((r) => ({ id: r.id, branchId: r.branch_id, categoryId: r.category_id || undefined, name: r.name, type: r.party_type, phone: r.phone || '', joiningDate: r.joining_date, monthlyAmount: num(r.monthly_amount), dueDay: num(r.due_day), status: r.status, leftDate: r.left_date || undefined, notes: r.notes || '' })),
     ledgerEntries: ledgerEntries.map((r) => ({ id: r.id, branchId: r.branch_id, partyId: r.party_id, categoryId: r.category_id || undefined, nature: r.nature, amount: num(r.amount), debitAmount: num(r.debit_amount), creditAmount: num(r.credit_amount), date: r.entry_date, period: r.period, description: r.description || '', paymentMode: r.payment_mode || undefined, reference: r.reference || undefined, remarks: r.remarks || undefined, cashbookId: r.cashbook_entry_id || undefined, expenseId: r.expense_id || undefined, createdAt: r.created_at })),
   } as AppData
+  return attachRentSnapshots(mapped)
 }
 
 export async function loadActivityLogs(): Promise<AppData['activityLogs']> {
@@ -110,6 +143,8 @@ export async function persistAppData(before: AppData, after: AppData, userId: st
     if (changedRows.length) await upsertWithRetry(table, changedRows)
   }
   for (const key of [...order].reverse()) {
+    // A bounded UI history window is not a request to delete historical audit rows.
+    if (key === 'activityLogs') continue
     const oldItems = (before as any)[key] || []
     const newItems = (after as any)[key] || []
     const newIds = new Set(newItems.map((item: any) => item.id))
@@ -121,7 +156,7 @@ export async function persistAppData(before: AppData, after: AppData, userId: st
 
 const AFFECTED_TABLES: Record<string, readonly string[]> = {
   admit: ['tenants', 'payments', 'cashbook_entries', 'activity_logs', 'payment_obligations', 'security_ledger', 'tenant_advances'] as const,
-  payment: ['tenants', 'payments', 'cashbook_entries', 'activity_logs', 'payment_obligations', 'security_ledger'] as const,
+  payment: ['tenants', 'payments', 'cashbook_entries', 'activity_logs', 'payment_obligations', 'security_ledger', 'tenant_advances'] as const,
   edit_tenant: ['tenants', 'rooms', 'activity_logs', 'payment_obligations'] as const,
   vacate: ['tenants', 'rooms', 'cashbook_entries', 'activity_logs', 'payment_obligations', 'security_ledger'] as const,
   delete_tenant: ['tenants', 'payments', 'cashbook_entries', 'activity_logs', 'payment_obligations', 'security_ledger', 'tenant_advances'] as const,
@@ -134,7 +169,7 @@ export async function refreshTables(tables: readonly string[], currentData: AppD
     tables.map(async (table) => {
       const response = table === 'activity_logs'
         ? await supabase.from(table).select('*').order('created_at', { ascending: false }).limit(ACTIVITY_LOG_LIMIT)
-        : await supabase.from(table).select('*')
+        : await selectAll(table)
       if (response.error) throw response.error
       return [table, response.data || []] as const
     })
@@ -167,7 +202,7 @@ export async function refreshTables(tables: readonly string[], currentData: AppD
     const staffById = new Map(staffList.map((row: any) => [row.id, row]))
     next.users = profileList.map((r: any) => { const s = staffById.get(r.id); return { id: r.id, name: r.name, phone: r.phone || '', role: r.role === 'admin' ? 'Admin' : 'Staff', active: r.active, email: s?.email || '', username: s?.username || '', branchIds: assignmentList.filter((a: any) => a.user_id === r.id).map((a: any) => a.branch_id), permissions: permissionList.filter((p: any) => p.user_id === r.id && p.allowed).map((p: any) => p.permission) } })
   }
-  return next
+  return tables.some((table) => ['tenants', 'payments', 'payment_obligations', 'tenant_advances', 'branches'].includes(table)) ? attachRentSnapshots(next) : next
 }
 
 export function getAffectedTables(operation: 'admit' | 'payment' | 'edit_tenant' | 'vacate' | 'delete_tenant' | 'delete_cashbook' | 'swap'): readonly string[] {

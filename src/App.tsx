@@ -2,10 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent, ReactNode } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase, supabaseConfigured } from './lib/supabase'
-import { admitTenant, cleanupOldActivityLogs, createStaffAccount, deactivateStaffAccount, deleteBranchCascade, deleteCashbookEntryCascade, deleteTenantWithPayments, editTenantWithRentAdjustment, getAffectedTables, getBranchRentCollectionSummary, loadAppData, loadActivityLogs, persistAppData, reactivateUserAccount, recordManualCashbookEntry, recordSplitPayment, refreshTables, rejoinTenantWithObligation, resetUserPassword, swapTenantRooms, moveTenantRoom, undoVacateTenant, vacateTenantErp } from './lib/database'
+import { admitTenant, createStaffAccount, deactivateStaffAccount, deleteBranchCascade, deleteCashbookEntryCascade, deleteTenantWithPayments, editTenantWithRentAdjustment, getAffectedTables, getBranchRentCollectionSummary, loadAppData, loadActivityLogs, persistAppData, reactivateUserAccount, recordManualCashbookEntry, recordSplitPayment, refreshTables, rejoinTenantWithObligation, resetUserPassword, swapTenantRooms, moveTenantRoom, undoVacateTenant, vacateTenantErp } from './lib/database'
 import type { RentCollectionSummary } from './lib/database'
 import { CategoryAccountEntryModal, CategoryAccountManagerModal, CategoryAccountSummary } from './features/simpleCategoryAccounts'
 import { importedRentPaidMonths } from './data/farukhnagarRentRegister'
+import { businessDate } from './lib/businessDate'
+import { accountReminder, tenantAccount } from './lib/tenantAccount'
+import type { RentSnapshot } from './lib/tenantAccount'
 import {
   AlertTriangle,
   Bell,
@@ -76,7 +79,6 @@ type Page =
 type RoomType = 'Single' | 'Double' | 'Triple' | 'Suite' | 'Custom'
 type RoomStatus = 'Occupied' | 'Vacant' | 'Maintenance'
 type PaymentStatus = 'Paid' | 'Pending' | 'Overdue'
-type RentLedgerStatus = PaymentStatus | 'Upcoming' | 'Clear'
 type TenantStatus = 'Active' | 'Notice' | 'Needs Verification' | 'Left'
 type EntryType = 'Credit' | 'Debit'
 type InventoryCategory = 'Furniture' | 'Linen' | 'Kitchen' | 'Electrical' | 'Housekeeping'
@@ -142,6 +144,8 @@ export type Room = {
   notes?: string
 }
 export type Tenant = {
+  /** Read-only account snapshot from the same RPC used to reconcile Dashboard dues. */
+  rentSnapshot?: RentSnapshot
   id: string
   branchId: string
   name: string
@@ -328,7 +332,7 @@ export type AppData = {
 const emptyAppData = (): AppData => ({ branches: [], users: [], tenants: [], rooms: [], payments: [], cashbook: [], expenses: [], inventory: [], purchases: [], tickets: [], invoices: [], activityLogs: [], obligations: [], securityLedger: [], advances: [], categories: [], ledgerParties: [], ledgerEntries: [] })
 
 const localDateValue = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
-const today = localDateValue(new Date())
+const today = businessDate()
 const currentMonth = today.slice(0, 7)
 const money = (value: number) => `₹${value.toLocaleString('en-IN')}`
 const formatDate = (value?: string) => value ? value.slice(0, 10).split('-').reverse().join('/') : '-'
@@ -362,58 +366,8 @@ const rentDueDateForPeriod = (dueDate: string, period: string) => {
   const lastDay = new Date(year, month, 0).getDate()
   return localDateValue(new Date(year, month - 1, Math.min(dueDay, lastDay)))
 }
-const nextPeriod = (period: string) => {
-  const [year, month] = period.split('-').map(Number)
-  const date = new Date(year, month, 1)
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
-}
-const periodsBetween = (start: string, end: string) => {
-  const periods: string[] = []
-  for (let period = start; period <= end; period = nextPeriod(period)) periods.push(period)
-  return periods
-}
 function getRentLedgerState(tenant: Tenant, payments: Payment[], obligations: PaymentObligation[] = [], advances: AdvanceMovement[] = []) {
-  const rentObligations = new Map<string, PaymentObligation>()
-  for (const item of obligations) if (item.tenantId === tenant.id && item.paymentType === 'Rent') rentObligations.set(item.period, item)
-  const rentPayments = new Map<string, number>()
-  for (const payment of payments) {
-    if (payment.tenantId !== tenant.id || payment.paymentType !== 'Rent') continue
-    rentPayments.set(payment.month, (rentPayments.get(payment.month) || 0) + payment.amount)
-  }
-  const advanceUsedByPeriod = new Map<string, number>()
-  for (const movement of advances) {
-    if (movement.tenantId !== tenant.id || movement.type !== 'used' || !movement.period) continue
-    advanceUsedByPeriod.set(movement.period, (advanceUsedByPeriod.get(movement.period) || 0) + movement.amount)
-  }
-  const currentStay = tenant.rejoins?.at(-1)
-  const cycleStartDate = currentStay?.rejoinDate || tenant.joiningDate
-  const dueAnchor = tenant.dueDate || currentStay?.dueDate || cycleStartDate
-  const joiningMonth = cycleStartDate.slice(0, 7)
-  const importedPaidMonths = new Set(importedRentPaidMonths[tenant.name.trim().toUpperCase()] || [])
-  const trackedPeriods = [...new Set([
-    ...periodsBetween(joiningMonth, currentMonth),
-    ...[...rentObligations.keys()].filter((period) => period >= joiningMonth),
-  ])].sort()
-  for (const period of trackedPeriods) {
-    const obligation = rentObligations.get(period)
-    const recordedPayments = rentPayments.get(period) || 0
-    const agreed = obligation?.agreed ?? tenant.monthlyRent
-    const received = Math.max(obligation?.received ?? 0, recordedPayments, importedPaidMonths.has(period) ? agreed : 0)
-    const advanceApplied = advanceUsedByPeriod.get(period) || 0
-    const pending = Math.max(0, agreed - received - advanceApplied)
-    if (pending > 0) {
-      const originalDueDate = obligation?.dueDate || rentDueDateForPeriod(dueAnchor, period)
-      const hasPartialPayment = received + advanceApplied > 0
-      const dueDate = originalDueDate
-      const status: RentLedgerStatus = hasPartialPayment ? 'Pending' : originalDueDate < today ? 'Overdue' : originalDueDate === today ? 'Pending' : daysUntil(originalDueDate) <= 3 ? 'Upcoming' : 'Clear'
-      return { period, paidThroughMonth: period === joiningMonth ? '-' : periodsBetween(joiningMonth, period).slice(-2, -1)[0] || '-', dueDate, agreed, received, advanceApplied, pending, status }
-    }
-  }
-  const latestTrackedPeriod = trackedPeriods.at(-1) || currentMonth
-  const lastCoveredPeriod = latestTrackedPeriod > currentMonth ? latestTrackedPeriod : currentMonth
-  const period = nextPeriod(lastCoveredPeriod)
-  const dueDate = rentDueDateForPeriod(dueAnchor, period)
-  return { period, paidThroughMonth: lastCoveredPeriod, dueDate, agreed: tenant.monthlyRent, received: 0, advanceApplied: 0, pending: 0, status: (daysUntil(dueDate) <= 3 ? 'Upcoming' : 'Clear') as RentLedgerStatus }
+  return tenantAccount(tenant, payments, obligations, advances)
 }
 
 function getCalculatedRentDueDate(tenant: Tenant, payments: Payment[], obligations: PaymentObligation[] = []) {
@@ -494,7 +448,7 @@ function branchData(data: AppData, branchId: string) {
     else advancesByTenant.set(movement.tenantId, [movement])
   }
   const rentStates = new Map(activeTenants.map((tenant) => [tenant.id, getRentLedgerState(tenant, paymentsByTenant.get(tenant.id) || [], obligationsByTenant.get(tenant.id) || [], advancesByTenant.get(tenant.id) || [])]))
-  const overdue = activeTenants.reduce((sum, tenant) => rentStates.get(tenant.id)?.status === 'Overdue' ? sum + (rentStates.get(tenant.id)?.pending || 0) : sum, 0)
+  const overdue = activeTenants.reduce((sum, tenant) => sum + (rentStates.get(tenant.id)?.overdue || 0), 0)
   const pending = activeTenants.reduce((sum, tenant) => {
     const state = rentStates.get(tenant.id)
     if (!state || (state.status !== 'Pending' && state.status !== 'Overdue')) return sum
@@ -677,11 +631,31 @@ function App() {
     return () => listener.subscription.unsubscribe()
   }, [])
 
+  const sessionUserId = session?.user.id
   useEffect(() => {
-    if (!session) { setData(emptyAppData()); return }
+    let cancelled = false
+    if (!sessionUserId) { setData(emptyAppData()); setDataLoading(false); return }
+    setData(emptyAppData())
     setDataLoading(true); setBackendError('')
-    loadAppData().then(async (next) => { const profile = next.users.find((user) => user.id === session.user.id); if (profile) setRole(profile.role); const loginBranch = next.branches.find((item) => profile?.role === 'Admin' || profile?.branchIds.includes(item.id)); const loginKey = `pg95-login:${session.user.id}`; const shouldLogLogin = sessionStorage.getItem(loginKey) !== '1'; const logged = profile && loginBranch && shouldLogLogin ? logActivity(next, { userName: profile.name, userId: profile.id, userRole: profile.role, branchId: loginBranch.id, branchName: loginBranch.name, module: 'Authentication', actionType: 'Login', description: `${profile.role} ${profile.name} logged in.` }) : next; dataRef.current = logged; setData(logged); if (logged !== next) { await persistAppData(next, logged, session.user.id); sessionStorage.setItem(loginKey, '1') }; const cleanupKey = 'pg95-last-cleanup'; const lastCleanup = localStorage.getItem(cleanupKey); const todayStr = new Date().toISOString().slice(0, 10); if (lastCleanup !== todayStr) { cleanupOldActivityLogs().catch(() => {}); localStorage.setItem(cleanupKey, todayStr) } }).catch((error) => setBackendError(error instanceof Error ? error.message : 'Unable to load Supabase data')).finally(() => setDataLoading(false))
-  }, [session])
+    void loadAppData().then(async (next) => {
+      if (cancelled) return
+      const profile = next.users.find((user) => user.id === sessionUserId)
+      if (profile) setRole(profile.role)
+      const loginBranch = next.branches.find((item) => profile?.role === 'Admin' || profile?.branchIds.includes(item.id))
+      const loginKey = `pg95-login:${sessionUserId}`
+      const shouldLogLogin = sessionStorage.getItem(loginKey) !== '1'
+      const logged = profile && loginBranch && shouldLogLogin ? logActivity(next, { userName: profile.name, userId: profile.id, userRole: profile.role, branchId: loginBranch.id, branchName: loginBranch.name, module: 'Authentication', actionType: 'Login', description: `${profile.role} ${profile.name} logged in.` }) : next
+      dataRef.current = logged
+      setData(logged)
+      if (logged !== next) {
+        await persistAppData(next, logged, sessionUserId)
+        if (!cancelled) sessionStorage.setItem(loginKey, '1')
+      }
+    }).catch((error) => {
+      if (!cancelled) setBackendError(error instanceof Error ? error.message : 'Unable to load Supabase data')
+    }).finally(() => { if (!cancelled) setDataLoading(false) })
+    return () => { cancelled = true }
+  }, [sessionUserId])
 
   useEffect(() => {
     if (branchId && !isAdmin && !currentUser.branchIds.includes(branchId)) setBranchId('')
@@ -1238,7 +1212,7 @@ function TenantsPage({ data, scoped, tenantTab, setTenantTab, filter, setFilter,
             const securityReceived = tenant.securityReceived
             const securityBalance = Math.max(0, tenant.security - tenant.securityReceived)
             const status = rentState.status
-            const whatsapp = `https://wa.me/91${tenant.phone}?text=${encodeURIComponent(`Hi ${tenant.name}, rent ${money(rentState.agreed)} for ${room.number} at ${data.branches.find((branch) => branch.id === tenant.branchId)?.name} is due on ${calculatedRentDueDate}. Balance: ${money(balance)}.`)}`
+            const whatsapp = `https://wa.me/91${tenant.phone.replace(/\D/g, '').slice(-10)}?text=${encodeURIComponent(accountReminder(tenant.name, rentState))}`
             const vacateDueDayCount = tenant.notice?.expectedLeavingDate ? vacateDueDays(tenant.notice.expectedLeavingDate) : null
             const isVacateDue = vacateDueDayCount !== null && vacateDueDayCount >= 0
             return <tr key={tenant.id} className="border-t border-slate-100">
@@ -1580,7 +1554,7 @@ type TenantRentState = ReturnType<typeof getRentLedgerState>
 
 function EditTenantModal({ tenant, rentState, rooms, tenants, onClose, onSubmit }: { tenant: Tenant; rentState: TenantRentState; rooms: Room[]; tenants: Tenant[]; onClose: () => void; onSubmit: (changes: TenantEditChanges) => Promise<void> }) {
   const [roomId, setRoomId] = useState(tenant.roomId)
-  const [rentBalanceInput, setRentBalanceInput] = useState(String(rentState.pending))
+  const [rentBalanceInput, setRentBalanceInput] = useState(String(rentState.periodPending))
   const [rentDueDate, setRentDueDate] = useState(rentState.dueDate)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -1598,7 +1572,7 @@ function EditTenantModal({ tenant, rentState, rooms, tenants, onClose, onSubmit 
     const bedNo = roomId === tenant.roomId ? tenant.bedNo : nextFreeBed
     if (!bedNo) { setError(`Room ${room.number} has no vacant bed.`); return }
     const rentBalance = Number(rentBalanceInput || 0)
-    const balanceChanged = Math.abs(rentBalance - rentState.pending) > 0.009
+    const balanceChanged = Math.abs(rentBalance - rentState.periodPending) > 0.009
     const dueDateChanged = rentDueDate !== rentState.dueDate
     setSaving(true)
     setError('')

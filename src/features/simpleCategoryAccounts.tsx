@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { businessDate } from '../lib/businessDate'
+import { confirmedSubmission } from '../lib/confirmedSubmission'
 import type { FormEvent, ReactNode } from 'react'
 import { History, Plus, X } from 'lucide-react'
 import type { Category, LedgerEntry, LedgerParty, LedgerPartyStatus, LedgerPartyType } from '../App'
@@ -10,7 +12,7 @@ import {
 } from '../lib/database'
 
 const inputClass = 'min-h-10 rounded-md border border-slate-400 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100'
-const today = () => new Date().toISOString().slice(0, 10)
+const today = businessDate
 const monthNow = () => today().slice(0, 7)
 const money = (value: number) => `₹${Math.abs(value || 0).toLocaleString('en-IN')}`
 const showDate = (value?: string) => value ? value.slice(0, 10).split('-').reverse().join('/') : '-'
@@ -84,7 +86,9 @@ export function CategoryAccountEntryModal({
   const [entryDate, setEntryDate] = useState(today())
   const [period, setPeriod] = useState(monthNow())
   const [paymentMode, setPaymentMode] = useState('Cash')
-  const [requestId, setRequestId] = useState(() => crypto.randomUUID())
+  const [requestId] = useState(() => crypto.randomUUID())
+  const [submission] = useState(() => confirmedSubmission<Parameters<typeof recordCategoryAccountTransaction>[0], Awaited<ReturnType<typeof recordCategoryAccountTransaction>>>())
+  const savingRef = useRef(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -109,15 +113,17 @@ export function CategoryAccountEntryModal({
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
+    if (savingRef.current) return
     if (!account || !action) return
     const numericAmount = Number(amount)
     if (!(numericAmount > 0)) { setError('Enter an amount greater than zero.'); return }
-    if (['Salary Payment', 'Payment Made', 'Rent Payment'].includes(action) && numericAmount > Math.max(0, balance)) { setError(`Payment cannot exceed current pending balance of ${money(Math.max(0, balance))}. Use Advance Given only when extra advance is intended.`); return }
+    if (!submission.confirmed && ['Salary Payment', 'Payment Made', 'Rent Payment'].includes(action) && numericAmount > Math.max(0, balance)) { setError(`Payment cannot exceed current pending balance of ${money(Math.max(0, balance))}. Use Advance Given only when extra advance is intended.`); return }
     const form = new FormData(event.currentTarget)
+    savingRef.current = true
     setSaving(true)
     setError('')
     try {
-      await recordCategoryAccountTransaction({
+      await submission.run({
         requestId,
         partyId: account.id,
         action,
@@ -128,13 +134,18 @@ export function CategoryAccountEntryModal({
         description: String(form.get('description') || '').trim(),
         reference: String(form.get('reference') || '').trim(),
         remarks: String(form.get('remarks') || '').trim(),
+      }, async (input) => {
+        const receipt = await recordCategoryAccountTransaction(input)
+        if (!receipt?.success || !receipt.ledger_entry_id) throw new Error('Save status could not be confirmed. Retry with the same values.')
+        return receipt
+      }, async () => {
+        await onSaved(`${action} of ${money(numericAmount)} saved for ${account.name}.`)
       })
-      setRequestId(crypto.randomUUID())
-      await onSaved(`${action} of ${money(numericAmount)} saved for ${account.name}.`)
       onClose()
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : 'Entry could not be saved.')
+      setError(submission.confirmed ? 'Entry saved, but the latest balances could not be refreshed. Retry with the same values to refresh; no second payment will be created.' : failure instanceof Error ? failure.message : 'Save status could not be confirmed. Keep these values and retry.')
     } finally {
+      savingRef.current = false
       setSaving(false)
     }
   }
