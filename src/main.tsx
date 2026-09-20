@@ -5,6 +5,7 @@ import App from './App.tsx'
 import PublicMaintenanceRequest from './PublicMaintenanceRequest.tsx'
 import UpdateNotice from './features/UpdateNotice'
 import { registerPwa } from './lib/pwaUpdate'
+import { registerDayRollover } from './lib/dayRollover'
 
 const path = window.location.pathname
 const maintenanceMatch = path.match(/^\/maintenance\/request\/([a-f0-9]+)$/)
@@ -16,6 +17,8 @@ createRoot(document.getElementById('root')!).render(
     <UpdateNotice />
   </StrictMode>,
 )
+
+if (!tokenFromUrl) registerDayRollover()
 
 if ('serviceWorker' in navigator) {
   if (import.meta.env.PROD) {
