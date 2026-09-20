@@ -1,4 +1,4 @@
-const CACHE = 'pg95-shell-v8'
+const CACHE = 'pg95-shell-v9'
 const SHELL = ['/', '/icons/apple-touch-icon.png', '/icons/favicon-32.png', '/icons/icon-192.png', '/icons/icon-512.png', '/icons/icon-maskable-512.png', '/manifest.webmanifest']
 
 self.addEventListener('install', (event) => {
@@ -16,13 +16,16 @@ self.addEventListener('install', (event) => {
       )
     }),
   )
-  self.skipWaiting()
+})
+
+self.addEventListener('message', (event) => {
+  if (event.data?.type === 'PG95_ACTIVATE_UPDATE') self.skipWaiting()
 })
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
-      Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key))),
+      Promise.all(keys.filter((key) => key.startsWith('pg95-shell-') && key !== CACHE).map((key) => caches.delete(key))),
     ),
   )
   self.clients.claim()
