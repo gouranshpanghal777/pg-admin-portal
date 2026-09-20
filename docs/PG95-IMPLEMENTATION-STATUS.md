@@ -55,6 +55,23 @@ Checkpoint verification: `npm test` passed 25 tests across 3 files; `npm run bui
 
 ## References checked
 
+## Second implementation pass
+
+Implemented and locally verified:
+
+- Service worker waits for an explicit update message. The update notice blocks activation while any form/dialog is open; controller changes never reload without approval. Cache cleanup is limited to PG95 shell caches. Actual worker install/message/activate/fetch handlers are covered by VM tests; this is not installed-device evidence.
+- Payment drafts use versioned user/branch/entity keys, a 24-hour TTL, an allowlist, and the same request ID on reopen. Edits persist immediately and on background/pagehide. Unresolved submissions freeze values; close keeps the draft, discard is explicit, and success clears it. Credentials and identity fields are not included. Other forms still need draft integration and automatic form reopening is not implemented.
+- Dashboard displayed pending totals now sum the same canonical tenant accounts. The separate server summary is retained as a mismatch diagnostic. Monthly collection uses payment date rather than allocated rent month.
+- Bill Creator now prints a clearly labelled current-dues statement from the canonical account, without reusing stale historical invoice dates/numbers or subtracting payments twice. Stored historical invoices are unchanged.
+- Staff Salary is discoverable through navigation and a Finance tab; existing staff ledger components and transaction permissions are reused.
+- Ordinary tenant editing preserves room, joining date, rent and recurring due anchor. Period-balance correction requires explicit opt-in and before/after confirmation. Unsafe bulk repricing is removed. Monthly-rent editing is temporarily read-only until future-effective backend support is implemented; this is a release limitation, not completion of rent-term editing.
+
+Verification: 36 tests across 7 files passed; production build passed; lint retains the 6 baseline warnings; legacy self-test and diff whitespace checks passed. React guidance informed primitive dependencies, explicit cleanup and synchronous submit guards.
+
+Still release-blocking: atomic admission+payment/rejoin/settlement, server-safe multi-period allocation replacing the legacy frontend repair, durable drafts beyond payment, ambiguous-failure classification/unlocking, day-rollover refresh, future-effective rent terms, authenticated browser/role tests, and physical-device PWA verification. No new migration has been applied. Do not merge this branch as a completed implementation.
+
+First preview verified READY for commit `9b18b7b0bb404daf87222f0d2e76a01c3e083281` at `pg-admin-portal-hqy3mj1sf-gouransh-team.vercel.app`; this predates the second pass and is not evidence of the latest UI.
+
 - [Supabase changelog](https://supabase.com/changelog) (Markdown endpoint unavailable; HTML index checked).
 - [RPC client API](https://supabase.com/docs/reference/javascript/rpc).
 - [Request-specific cancellation](https://supabase.com/docs/reference/javascript/using-modifiers-abortsignal).
