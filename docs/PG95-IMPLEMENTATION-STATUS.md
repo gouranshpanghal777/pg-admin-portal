@@ -68,7 +68,9 @@ Implemented and locally verified:
 
 Verification: 36 tests across 7 files passed; production build passed; lint retains the 6 baseline warnings; legacy self-test and diff whitespace checks passed. A subsequent day-rollover guard reloads the app only after the Asia/Kolkata business date changes and no form/dialog is open; its GitHub Quality Gate (self-test, build, lint) passed. React guidance informed primitive dependencies, explicit cleanup and synchronous submit guards.
 
-Still release-blocking: atomic admission+payment/rejoin/settlement, server-safe multi-period allocation replacing the legacy frontend repair, durable drafts beyond payment, ambiguous-failure classification/unlocking, future-effective rent terms, authenticated browser/role tests, and physical-device PWA verification. No new migration has been applied. Do not merge this branch as a completed implementation.
+Still release-blocking: atomic admission+payment/rejoin/settlement, server-safe multi-period allocation replacing the legacy frontend repair, durable drafts beyond payment, ambiguous-failure classification/unlocking, future-effective rent terms, authenticated browser/role tests, and physical-device PWA verification.
+
+Prepared but deliberately not applied: `supabase/migrations/202609210001_atomic_rejoin_payment.sql` introduces an idempotent request record and a single transactional RPC for rejoin + optional first rent payment, including permission checks and changed-payload rejection. The frontend still uses the existing production RPC until this migration is reviewed, applied, and verified; therefore this blocker is not marked complete. No new migration has been applied. Do not merge this branch as a completed implementation.
 
 First preview verified READY for commit `9b18b7b0bb404daf87222f0d2e76a01c3e083281` at `pg-admin-portal-hqy3mj1sf-gouransh-team.vercel.app`; this predates the second pass and is not evidence of the latest UI.
 
