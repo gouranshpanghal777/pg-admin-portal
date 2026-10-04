@@ -1605,9 +1605,17 @@ function EditTenantModal({ tenant, rentState, rooms, tenants, onClose, onSubmit 
     const bedNo = roomId === tenant.roomId ? tenant.bedNo : nextFreeBed
     if (!bedNo) { setError(`Room ${room.number} has no vacant bed.`); return }
     const rentBalance = Number(rentBalanceInput || 0)
+    const monthlyRent = Number(form.get('monthlyRent'))
+    if (!Number.isFinite(monthlyRent) || monthlyRent < 0) { setError('Monthly rent must be 0 or more.'); return }
+    const monthlyRentChanged = Math.abs(monthlyRent - tenant.monthlyRent) > 0.009
     const balanceChanged = Math.abs(rentBalance - rentState.periodPending) > 0.009
     const dueDateChanged = rentDueDate !== rentState.dueDate
-    if (adjustment && !window.confirm(`Correct ${rentState.period}: balance ${rentState.periodPending} → ${rentBalance}; due date ${rentState.dueDate} → ${rentDueDate}? Other rent periods and the recurring anchor stay unchanged.`)) return
+    const confirmations = [
+      monthlyRentChanged ? `Monthly rent ${money(tenant.monthlyRent)} → ${money(monthlyRent)}. Existing recorded rent periods keep their agreed amounts; new periods use the new rent.` : '',
+      adjustment && balanceChanged ? `${formatMonth(rentState.period)} balance ${money(rentState.periodPending)} → ${money(rentBalance)}.` : '',
+      adjustment && dueDateChanged ? `${formatMonth(rentState.period)} due date ${formatDate(rentState.dueDate)} → ${formatDate(rentDueDate)}.` : '',
+    ].filter(Boolean)
+    if (confirmations.length && !window.confirm(`Save these changes for ${tenant.name}?\n\n${confirmations.join('\n')}\n\nExisting payment and cashbook history will not be deleted or rewritten.`)) return
     savingRef.current = true
     setSaving(true)
     setError('')
@@ -1619,7 +1627,7 @@ function EditTenantModal({ tenant, rentState, rooms, tenants, onClose, onSubmit 
         roomId,
         bedNo,
         joiningDate: tenant.joiningDate,
-        monthlyRent: tenant.monthlyRent,
+        monthlyRent,
         security: adjustment ? Number(form.get('security')) : tenant.security,
         electricity: adjustment ? String(form.get('electricity')) as Tenant['electricity'] : tenant.electricity,
         electricityAmount: adjustment ? Number(form.get('electricityAmount')) : tenant.electricityAmount,
@@ -1647,14 +1655,14 @@ function EditTenantModal({ tenant, rentState, rooms, tenants, onClose, onSubmit 
     <Field label="Email"><input name="email" className={inputClass} type="email" defaultValue={tenant.email} placeholder="Optional" /></Field>
     <Field label="Room number"><select className={inputClass} value={roomId} disabled>{available.map((room) => <option key={room.id} value={room.id}>Room {room.number} · {tenants.filter((item) => item.roomId === room.id && item.id !== tenant.id).length}/{room.beds} occupied</option>)}</select></Field>
     <Field label="Joining date"><input name="joiningDate" readOnly className={inputClass} type="date" defaultValue={tenant.joiningDate} /></Field>
-    <Field label="Monthly rent"><input name="monthlyRent" readOnly className={inputClass} type="number" min="0" step="0.01" inputMode="decimal" onWheel={(event) => event.currentTarget.blur()} defaultValue={tenant.monthlyRent} /></Field>
+    <Field label="Monthly rent"><input name="monthlyRent" className={inputClass} type="number" min="0" step="0.01" inputMode="decimal" onWheel={(event) => event.currentTarget.blur()} defaultValue={tenant.monthlyRent} required /></Field>
     <Field label="Security deposit"><input name="security" disabled={!adjustment} className={inputClass} type="number" min="0" step="0.01" inputMode="decimal" onWheel={(event) => event.currentTarget.blur()} defaultValue={tenant.security} /></Field>
     <Field label="Electricity option"><select name="electricity" disabled={!adjustment} className={inputClass} defaultValue={tenant.electricity}><option>Included</option><option>Fixed</option></select></Field>
     <Field label="Electricity amount"><input name="electricityAmount" disabled={!adjustment} className={inputClass} type="number" min="0" step="0.01" inputMode="decimal" onWheel={(event) => event.currentTarget.blur()} defaultValue={tenant.electricityAmount} /></Field>
     <Field label="Aadhaar number"><input name="idProof" className={inputClass} inputMode="numeric" maxLength={12} pattern="[0-9]{12}" title="Enter a 12-digit Aadhaar number" defaultValue={tenant.idProof.replace(/\s/g, '')} placeholder="Optional, 12 digits" /></Field>
     <Field label="Status"><select name="status" className={inputClass} defaultValue={tenant.status}><option>Active</option><option>Notice</option><option>Needs Verification</option></select></Field>
 
-    <p className="md:col-span-2 text-sm text-slate-600">Profile edits preserve joining date, monthly rent, recurring billing day and room history. Use Move Room for a room change. Future-effective rent terms require the reviewed backend change.</p>
+    <p className="md:col-span-2 text-sm text-slate-600">Profile edits preserve joining date, recurring billing day and room history. Monthly rent can be changed here: existing recorded rent periods keep their agreed amount, while new rent periods use the updated monthly rent. Use Move Room for a room change.</p>
     <label className="md:col-span-2 flex gap-2"><input type="checkbox" checked={adjustment} onChange={(event) => setAdjustment(event.target.checked)} /> Explicit financial correction (review before saving)</label>
     <div className="md:col-span-2 grid gap-3 rounded-md border border-amber-200 bg-amber-50 p-4">
       <div><p className="font-bold text-amber-900">Rent Ledger Adjustment</p><p className="text-xs text-amber-800">Period: {formatMonth(rentState.period)} · Already received: {money(rentState.received)} · Advance applied: {money(rentState.advanceApplied)}</p></div>
