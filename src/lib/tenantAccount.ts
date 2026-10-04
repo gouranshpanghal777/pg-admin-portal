@@ -30,7 +30,7 @@ export function tenantAccount(tenant: Tenant, payments: Payment[], obligations: 
   const rentLines: AccountLine[] = periods.map((period) => {
     const obligation = rentObligations.find((row) => row.period === period)
     const server = snapshot?.lines.find((line) => line.period === period)
-    const recorded = ownPayments.filter((row) => row.paymentType === 'Rent' && row.month === period).reduce((sum, row) => sum + row.amount, 0)
+    const recorded = ownPayments.filter((row) => !row.allocationManaged && row.paymentType === 'Rent' && row.month === period).reduce((sum, row) => sum + row.amount, 0)
     const agreed = Number(server?.agreed ?? obligation?.agreed ?? tenant.monthlyRent)
     const received = Number(server?.received ?? Math.max(obligation?.received || 0, recorded))
     // Obligation advance_applied is authoritative. Do not also subtract the advance ledger.

@@ -7,7 +7,7 @@ function worker() {
   const skipWaiting = vi.fn()
   const remove = vi.fn(async () => true)
   const cache = { put: vi.fn(async () => {}) }
-  const caches = { open: vi.fn(async () => cache), keys: async () => ['unrelated-cache', 'pg95-shell-v8', 'pg95-shell-v9'], delete: remove }
+  const caches = { open: vi.fn(async () => cache), keys: async () => ['unrelated-cache', 'pg95-shell-v9', 'pg95-shell-v10'], delete: remove }
   const self = { addEventListener: (name: string, callback: (event: any) => void) => listeners.set(name, callback), skipWaiting, location: { origin: 'https://pg95.example' }, clients: { claim: vi.fn() } }
   runInNewContext(readFileSync(new URL('../public/sw.js', import.meta.url), 'utf8'), { self, caches, URL, fetch: async () => ({ ok: true }) })
   return { listeners, skipWaiting, remove }
@@ -31,7 +31,7 @@ it('activation removes only old PG95 shell caches', async () => {
   let work: Promise<void> | undefined
   listeners.get('activate')!({ waitUntil: (promise: Promise<void>) => { work = promise } })
   await work
-  expect(remove.mock.calls).toEqual([['pg95-shell-v8']])
+  expect(remove.mock.calls).toEqual([['pg95-shell-v9']])
 })
 it('does not intercept Supabase or non-GET requests', () => {
   const { listeners } = worker()
