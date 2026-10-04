@@ -1,0 +1,96 @@
+name: Tenant UI hotfix
+
+on:
+  push:
+    paths:
+      - '.github/workflows/tenant-ui-hotfix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-and-commit:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Apply focused tenant UI fixes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          # 1) Correction submit button: remove conflicting white/blue Tailwind utilities.
+          p = Path('src/features/TenantLedgerCorrections.tsx')
+          s = p.read_text()
+          old = "const button='rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40'"
+          new = "const buttonBase='rounded-md border px-3 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40'\nconst button=`${buttonBase} border-slate-300 bg-white text-slate-700 hover:bg-slate-50`\nconst primaryButton=`${buttonBase} border-blue-600 bg-blue-600 text-white hover:bg-blue-700`"
+          assert old in s, 'Correction button base changed unexpectedly'
+          s = s.replace(old, new, 1)
+          old_submit = 'className={`${button} border-blue-600 bg-blue-600 text-white`}'
+          assert old_submit in s, 'Correction submit button changed unexpectedly'
+          s = s.replace(old_submit, 'className={primaryButton}', 1)
+          p.write_text(s)
+
+          # 2) Allow admin to change a tenant monthly rent safely.
+          # Existing historical payment obligations are NOT rewritten; new monthly rent is
+          # used for new/future periods while the separate ledger adjustment remains explicit.
+          p = Path('src/App.tsx')
+          s = p.read_text()
+
+          old_logic = """    const rentBalance = Number(rentBalanceInput || 0)\n    const balanceChanged = Math.abs(rentBalance - rentState.periodPending) > 0.009\n    const dueDateChanged = rentDueDate !== rentState.dueDate\n    if (adjustment && !window.confirm(`Correct ${rentState.period}: balance ${rentState.periodPending} → ${rentBalance}; due date ${rentState.dueDate} → ${rentDueDate}? Other rent periods and the recurring anchor stay unchanged.`)) return\n"""
+          new_logic = """    const rentBalance = Number(rentBalanceInput || 0)\n    const monthlyRent = Number(form.get('monthlyRent'))\n    if (!Number.isFinite(monthlyRent) || monthlyRent < 0) { setError('Monthly rent must be 0 or more.'); return }\n    const monthlyRentChanged = Math.abs(monthlyRent - tenant.monthlyRent) > 0.009\n    const balanceChanged = Math.abs(rentBalance - rentState.periodPending) > 0.009\n    const dueDateChanged = rentDueDate !== rentState.dueDate\n    const confirmations = [\n      monthlyRentChanged ? `Monthly rent ${money(tenant.monthlyRent)} → ${money(monthlyRent)}. Existing recorded rent periods keep their agreed amounts; new periods use the new rent.` : '',\n      adjustment && balanceChanged ? `${formatMonth(rentState.period)} balance ${money(rentState.periodPending)} → ${money(rentBalance)}.` : '',\n      adjustment && dueDateChanged ? `${formatMonth(rentState.period)} due date ${formatDate(rentState.dueDate)} → ${formatDate(rentDueDate)}.` : '',\n    ].filter(Boolean)\n    if (confirmations.length && !window.confirm(`Save these changes for ${tenant.name}?\\n\\n${confirmations.join('\\n')}\\n\\nExisting payment and cashbook history will not be deleted or rewritten.`)) return\n"""
+          assert old_logic in s, 'Edit tenant submit logic changed unexpectedly'
+          s = s.replace(old_logic, new_logic, 1)
+
+          old_value = "        monthlyRent: tenant.monthlyRent,"
+          assert old_value in s, 'Monthly rent submit value changed unexpectedly'
+          s = s.replace(old_value, "        monthlyRent,", 1)
+
+          old_input = '<Field label="Monthly rent"><input name="monthlyRent" readOnly className={inputClass} type="number" min="0" step="0.01" inputMode="decimal" onWheel={(event) => event.currentTarget.blur()} defaultValue={tenant.monthlyRent} /></Field>'
+          new_input = '<Field label="Monthly rent"><input name="monthlyRent" className={inputClass} type="number" min="0" step="0.01" inputMode="decimal" onWheel={(event) => event.currentTarget.blur()} defaultValue={tenant.monthlyRent} required /></Field>'
+          assert old_input in s, 'Monthly rent input changed unexpectedly'
+          s = s.replace(old_input, new_input, 1)
+
+          old_help = '<p className="md:col-span-2 text-sm text-slate-600">Profile edits preserve joining date, monthly rent, recurring billing day and room history. Use Move Room for a room change. Future-effective rent terms require the reviewed backend change.</p>'
+          new_help = '<p className="md:col-span-2 text-sm text-slate-600">Profile edits preserve joining date, recurring billing day and room history. Monthly rent can be changed here: existing recorded rent periods keep their agreed amount, while new rent periods use the updated monthly rent. Use Move Room for a room change.</p>'
+          assert old_help in s, 'Edit tenant helper text changed unexpectedly'
+          s = s.replace(old_help, new_help, 1)
+
+          p.write_text(s)
+          PY
+
+          # Static regression checks for the two reported issues.
+          grep -q 'className={primaryButton}' src/features/TenantLedgerCorrections.tsx
+          grep -q 'const primaryButton=' src/features/TenantLedgerCorrections.tsx
+          grep -q 'name="monthlyRent" className={inputClass}' src/App.tsx
+          grep -q 'monthlyRent,' src/App.tsx
+          ! grep -q 'name="monthlyRent" readOnly' src/App.tsx
+
+      - name: Install dependencies
+        run: npm ci
+      - name: Self test
+        run: npm run self-test
+      - name: Test
+        run: npm test
+      - name: Build
+        run: npm run build
+      - name: Lint
+        run: npm run lint
+      - name: Diff check
+        run: git diff --check
+      - name: Commit verified fix
+        shell: bash
+        run: |
+          rm .github/workflows/tenant-ui-hotfix.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/App.tsx src/features/TenantLedgerCorrections.tsx .github/workflows/tenant-ui-hotfix.yml
+          git commit -m 'Fix tenant correction buttons and monthly rent editing'
+          git push origin HEAD:main
