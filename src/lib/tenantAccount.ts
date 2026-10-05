@@ -50,11 +50,25 @@ export function tenantAccount(tenant: Tenant, payments: Payment[], obligations: 
   const dueDate = first?.dueDate || dueDateForPeriod(tenant.dueDate || tenant.joiningDate, period)
   const status: 'Overdue' | 'Pending' | 'Upcoming' | 'Clear' = overdue > 0 ? 'Overdue' : pending > 0 ? 'Pending' : calendarDays(asOfDate, dueDate) >= 0 && calendarDays(asOfDate, dueDate) <= 3 ? 'Upcoming' : 'Clear'
   const explicitHeadDue = (head: PaymentObligation['paymentType']) => roundMoney(ownObligations.filter((row) => row.paymentType === head && (row.dueDate || `${row.period}-01`) <= asOfDate).reduce((sum, row) => {
-    const paid = ownPayments.filter((payment) => payment.paymentType === head && payment.month === row.period).reduce((total, payment) => total + payment.amount, 0)
+    const paid = ownPayments.filter((payment) => !payment.allocationManaged && payment.paymentType === head && payment.month === row.period).reduce((total, payment) => total + payment.amount, 0)
     return sum + Math.max(0, row.agreed - Math.max(row.received, paid) - row.advanceApplied)
   }, 0))
-  // Never invent historical fixed electricity bills from a current tenant setting.
-  const electricityDue = tenant.electricity === 'Included' ? 0 : explicitHeadDue('Electricity')
+
+  // Fixed electricity is recurring from its effective month. Explicit rows always win:
+  // they preserve historical rates, paid/partial receipts, and zero-value exempted months.
+  const electricityObligations = ownObligations.filter((row) => row.paymentType === 'Electricity')
+  const explicitElectricityPeriods = new Set(electricityObligations.map((row) => row.period))
+  const electricityEffectivePeriod = (tenant as Tenant & { electricityEffectivePeriod?: string }).electricityEffectivePeriod || month
+  const electricityStartPeriod = [tenant.joiningDate.slice(0, 7), electricityEffectivePeriod].sort().at(-1) || month
+  const synthesizedElectricityDue = tenant.status !== 'Left' && tenant.electricity === 'Fixed' && tenant.electricityAmount > 0
+    ? roundMoney(periodsBetween(electricityStartPeriod, month).reduce((sum, billingPeriod) => {
+        if (explicitElectricityPeriods.has(billingPeriod)) return sum
+        const billDueDate = dueDateForPeriod(tenant.dueDate || tenant.joiningDate, billingPeriod)
+        return billDueDate <= asOfDate ? sum + tenant.electricityAmount : sum
+      }, 0))
+    : 0
+  // Old explicit electricity balances remain payable even after the current setting becomes Included.
+  const electricityDue = roundMoney(explicitHeadDue('Electricity') + synthesizedElectricityDue)
   const otherDue = explicitHeadDue('Other')
   const securityDue = Math.max(0, roundMoney(tenant.security - tenant.securityReceived))
   const credit = Math.max(0, roundMoney(ownAdvances.reduce((sum, row) => sum + (row.type === 'credit' ? row.amount : -row.amount), 0)))
@@ -67,7 +81,7 @@ export function tenantAccount(tenant: Tenant, payments: Payment[], obligations: 
     paidThroughMonth: rentLines.filter((line) => line.pending === 0 && line.period < period).at(-1)?.period || '-',
     electricityDue, securityDue, otherDue, credit,
     totalPayable: roundMoney(pending + electricityDue + securityDue + otherDue),
-    electricityNeedsReview: tenant.electricity === 'Fixed' && tenant.electricityAmount > 0 && !ownObligations.some((row) => row.paymentType === 'Electricity' && row.period === month),
+    electricityNeedsReview: tenant.electricity === 'Fixed' && tenant.electricityAmount <= 0,
     source: snapshot ? 'database' as const : 'reconstructed' as const,
   }
 }
@@ -84,7 +98,7 @@ export function accountReminder(name: string, account: TenantAccount): string {
     ...lines.filter(([, amount]) => amount > 0).map(([label, amount]) => `${label}: ${currency(amount)}`),
     `Total payable: ${currency(account.totalPayable)}`,
     ...(account.credit > 0 ? [`Unapplied advance: ${currency(account.credit)} (shown separately; please confirm allocation).`] : []),
-    ...(account.electricityNeedsReview ? ['Fixed electricity has not been billed for this period; please confirm separately.'] : []),
+    ...(account.electricityNeedsReview ? ['Fixed electricity amount is missing; update the tenant before collecting or carrying electricity forward.'] : []),
     ...(account.pending > 0 ? [`Oldest unpaid rent due: ${account.dueDate}`] : []),
     'Thank you.',
   ].join('\n')
