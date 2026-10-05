@@ -16,9 +16,9 @@ export function decodePaymentDraft(raw: string | null, now = Date.now()): Paymen
     if (!d || !/^[a-f0-9-]{36}$/i.test(d.requestId) || typeof d.tenantId !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(d.paymentDate)) return
     if (!['Cash', 'UPI', 'Bank Transfer', 'Card'].includes(d.paymentMode) || typeof d.attempted !== 'boolean' || typeof d.description !== 'string') return
     if (![d.rentAmount, d.securityAmount, d.electricityAmount, d.otherAmount].every((n) => typeof n === 'number' && Number.isFinite(n) && n >= 0)) return
-    const electricityAction: ElectricityPaymentAction = ['auto', 'paid', 'pending', 'exempted', 'settle-existing', 'included'].includes(d.electricityAction) ? d.electricityAction : 'auto'
+    const electricityAction = ['auto', 'paid', 'pending', 'exempted', 'settle-existing', 'included'].includes(d.electricityAction) ? d.electricityAction as ElectricityPaymentAction : undefined
     // Explicit allowlist prevents passwords, identity documents or unexpected fields restoring.
-    return { requestId: d.requestId, tenantId: d.tenantId, paymentMode: d.paymentMode, paymentDate: d.paymentDate, rentAmount: d.rentAmount, securityAmount: d.securityAmount, electricityAmount: d.electricityAmount, otherAmount: d.otherAmount, description: d.description.slice(0, 2000), attempted: d.attempted, rentPeriod: typeof d.rentPeriod === 'string' && /^\d{4}-\d{2}$/.test(d.rentPeriod) ? d.rentPeriod : undefined, electricityAction }
+    return { requestId: d.requestId, tenantId: d.tenantId, paymentMode: d.paymentMode, paymentDate: d.paymentDate, rentAmount: d.rentAmount, securityAmount: d.securityAmount, electricityAmount: d.electricityAmount, otherAmount: d.otherAmount, description: d.description.slice(0, 2000), attempted: d.attempted, rentPeriod: typeof d.rentPeriod === 'string' && /^\d{4}-\d{2}$/.test(d.rentPeriod) ? d.rentPeriod : undefined, ...(electricityAction ? { electricityAction } : {}) }
   } catch { return }
 }
 export function encodePaymentDraft(value: PaymentDraft, now = Date.now()) {
