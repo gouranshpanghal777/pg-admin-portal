@@ -53,8 +53,14 @@ export function tenantAccount(tenant: Tenant, payments: Payment[], obligations: 
     const paid = ownPayments.filter((payment) => payment.paymentType === head && payment.month === row.period).reduce((total, payment) => total + payment.amount, 0)
     return sum + Math.max(0, row.agreed - Math.max(row.received, paid) - row.advanceApplied)
   }, 0))
-  // Never invent historical fixed electricity bills from a current tenant setting.
+  // Existing explicit electricity obligations remain authoritative. Do not create historical bills from today's fixed setting.
   const electricityDue = tenant.electricity === 'Included' ? 0 : explicitHeadDue('Electricity')
+  const currentElectricityObligation = ownObligations.some((row) => row.paymentType === 'Electricity' && row.period === month)
+  const currentElectricityPaid = roundMoney(ownPayments.filter((payment) => payment.paymentType === 'Electricity' && payment.month === month).reduce((total, payment) => total + payment.amount, 0))
+  // WhatsApp reminder may include this month's configured fixed bill without persisting/carrying it as an old balance.
+  const unbilledCurrentElectricityDue = tenant.status !== 'Left' && tenant.electricity === 'Fixed' && tenant.electricityAmount > 0 && !currentElectricityObligation && tenant.joiningDate.slice(0, 7) <= month
+    ? Math.max(0, roundMoney(tenant.electricityAmount - currentElectricityPaid))
+    : 0
   const otherDue = explicitHeadDue('Other')
   const securityDue = Math.max(0, roundMoney(tenant.security - tenant.securityReceived))
   const credit = Math.max(0, roundMoney(ownAdvances.reduce((sum, row) => sum + (row.type === 'credit' ? row.amount : -row.amount), 0)))
@@ -65,9 +71,9 @@ export function tenantAccount(tenant: Tenant, payments: Payment[], obligations: 
     period, dueDate, status: status as 'Paid' | 'Overdue' | 'Pending' | 'Upcoming' | 'Clear', periodPending: first?.pending || 0,
     agreed: first?.agreed ?? tenant.monthlyRent, received: first?.received || 0, advanceApplied: first?.advanceApplied || 0,
     paidThroughMonth: rentLines.filter((line) => line.pending === 0 && line.period < period).at(-1)?.period || '-',
-    electricityDue, securityDue, otherDue, credit,
+    electricityDue, unbilledCurrentElectricityDue, securityDue, otherDue, credit,
     totalPayable: roundMoney(pending + electricityDue + securityDue + otherDue),
-    electricityNeedsReview: tenant.electricity === 'Fixed' && tenant.electricityAmount > 0 && !ownObligations.some((row) => row.paymentType === 'Electricity' && row.period === month),
+    electricityNeedsReview: unbilledCurrentElectricityDue > 0,
     source: snapshot ? 'database' as const : 'reconstructed' as const,
   }
 }
@@ -76,15 +82,17 @@ export type TenantAccount = ReturnType<typeof tenantAccount>
 
 export function accountReminder(name: string, account: TenantAccount): string {
   const currency = (value: number) => `₹${value.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`
+  const reminderElectricityDue = roundMoney(account.electricityDue + account.unbilledCurrentElectricityDue)
+  const reminderTotalPayable = roundMoney(account.totalPayable + account.unbilledCurrentElectricityDue)
   const lines = [
     ["Previous rent balance", account.previousRentDue], ["Current rent due", account.currentRentDue],
-    ["Electricity due", account.electricityDue], ["Security balance", account.securityDue], ["Other charges", account.otherDue],
+    ["Electricity due", reminderElectricityDue], ["Security balance", account.securityDue], ["Other charges", account.otherDue],
   ] as const
   return [`Hello ${name},`, `PG95 payment summary as of ${account.asOfDate}:`,
     ...lines.filter(([, amount]) => amount > 0).map(([label, amount]) => `${label}: ${currency(amount)}`),
-    `Total payable: ${currency(account.totalPayable)}`,
+    `Total payable: ${currency(reminderTotalPayable)}`,
     ...(account.credit > 0 ? [`Unapplied advance: ${currency(account.credit)} (shown separately; please confirm allocation).`] : []),
-    ...(account.electricityNeedsReview ? ['Fixed electricity has not been billed for this period; please confirm separately.'] : []),
+    ...(account.unbilledCurrentElectricityDue > 0 ? ['Current fixed electricity is included in this WhatsApp total.'] : []),
     ...(account.pending > 0 ? [`Oldest unpaid rent due: ${account.dueDate}`] : []),
     'Thank you.',
   ].join('\n')
