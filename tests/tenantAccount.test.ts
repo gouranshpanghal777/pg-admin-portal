@@ -14,11 +14,29 @@ describe('canonical tenant account', () => {
     expect(account.overdue).toBe(600)
   })
   it('does not demand future rent', () => expect(tenantAccount(tenant, [], obligations, [], '2026-09-14').pending).toBe(600))
-  it('uses explicit fixed electricity only, never double charges Included', () => {
+  it('uses explicit electricity obligations without double charging them', () => {
     const billed = [...obligations, obligation('2026-09', 0, 'Electricity', 350)]
     expect(tenantAccount({ ...tenant, electricity: 'Fixed' }, [], billed, [], '2026-09-15').totalPayable).toBe(7450)
-    expect(tenantAccount(tenant, [], billed, [], '2026-09-15').totalPayable).toBe(7100)
-    expect(tenantAccount({ ...tenant, electricity: 'Fixed' }, [], obligations, [], '2026-09-15').electricityNeedsReview).toBe(true)
+    // An old explicit electricity balance remains payable even if the current setting later becomes Included.
+    expect(tenantAccount(tenant, [], billed, [], '2026-09-15').totalPayable).toBe(7450)
+    expect(tenantAccount({ ...tenant, electricity: 'Fixed' }, [], obligations, [], '2026-09-15').electricityDue).toBe(350)
+  })
+  it('carries fixed electricity forward month by month from its effective period', () => {
+    const fixed = { ...tenant, joiningDate: '2026-09-01', dueDate: '2026-09-01', electricity: 'Fixed' as const, electricityAmount: 350, electricityEffectivePeriod: '2026-09' } as Tenant & { electricityEffectivePeriod: string }
+    const account = tenantAccount(fixed, [], [], [], '2026-10-15')
+    expect(account.electricityDue).toBe(700)
+  })
+  it('treats an explicit zero-value electricity month as exempted instead of synthesizing it', () => {
+    const fixed = { ...tenant, joiningDate: '2026-09-01', dueDate: '2026-09-01', electricity: 'Fixed' as const, electricityAmount: 350, electricityEffectivePeriod: '2026-09' } as Tenant & { electricityEffectivePeriod: string }
+    const exempt = obligation('2026-10', 0, 'Electricity', 0)
+    const account = tenantAccount(fixed, [], [exempt], [], '2026-10-15')
+    expect(account.electricityDue).toBe(350)
+  })
+  it('preserves historical electricity rate rows when the current fixed rate changes', () => {
+    const fixed = { ...tenant, joiningDate: '2026-09-01', dueDate: '2026-09-01', electricity: 'Fixed' as const, electricityAmount: 500, electricityEffectivePeriod: '2026-10' } as Tenant & { electricityEffectivePeriod: string }
+    const oldRate = obligation('2026-09', 0, 'Electricity', 350)
+    const account = tenantAccount(fixed, [], [oldRate], [], '2026-10-15')
+    expect(account.electricityDue).toBe(850)
   })
   it('never adds payment rows on top of received totals', () => {
     const payment = { tenantId: 't1', branchId: 'b1', paymentType: 'Rent', month: '2026-08', amount: 5900 } as Payment
@@ -42,9 +60,17 @@ describe('canonical tenant account', () => {
     const account = tenantAccount({ ...tenant, rentSnapshot: { asOfDate: '2026-09-15', lines: [{ tenant_id: 't1', period: '2026-09', due_date: '2026-09-20', agreed: 6500, received: 0, advance_applied: 0, outstanding: 6500, source: 'payment_obligations' }] } }, [], obligations, [], '2026-09-15')
     expect(account.pending).toBe(0); expect(account.expectedTillMonthEnd).toBe(6500)
   })
-  it('does not synthesize new rent for a left tenant', () => expect(tenantAccount({ ...tenant, status: 'Left' }, [], [], [], '2026-09-15').pending).toBe(0))
-  it('reminder and UI use exactly the same breakup', () => {
-    const message = accountReminder(tenant.name, tenantAccount(tenant, [], obligations, [], '2026-09-15'))
-    expect(message).toContain('Previous rent balance: ₹600'); expect(message).toContain('Total payable: ₹7,100')
+  it('does not synthesize new rent or electricity for a left tenant', () => {
+    const left = { ...tenant, status: 'Left' as const, electricity: 'Fixed' as const, electricityAmount: 350 }
+    const account = tenantAccount(left, [], [], [], '2026-09-15')
+    expect(account.pending).toBe(0); expect(account.electricityDue).toBe(0)
+  })
+  it('reminder and UI use exactly the same breakup including electricity', () => {
+    const fixed = { ...tenant, electricity: 'Fixed' as const, electricityAmount: 350 }
+    const account = tenantAccount(fixed, [], obligations, [], '2026-09-15')
+    const message = accountReminder(tenant.name, account)
+    expect(message).toContain('Previous rent balance: ₹600')
+    expect(message).toContain('Electricity due: ₹350')
+    expect(message).toContain('Total payable: ₹7,450')
   })
 })
