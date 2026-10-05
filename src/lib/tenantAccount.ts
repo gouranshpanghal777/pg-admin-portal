@@ -54,14 +54,35 @@ export function tenantAccount(tenant: Tenant, payments: Payment[], obligations: 
     return sum + Math.max(0, row.agreed - Math.max(row.received, paid) - row.advanceApplied)
   }, 0))
 
-  // Keep only explicitly recorded electricity balances in the ledger. Do not auto-create/carry old fixed bills.
-  const electricityDue = explicitHeadDue('Electricity')
-  const currentElectricityObligation = ownObligations.some((row) => row.paymentType === 'Electricity' && row.period === month)
-  const currentElectricityPaid = roundMoney(ownPayments.filter((payment) => payment.paymentType === 'Electricity' && payment.month === month).reduce((total, payment) => total + payment.amount, 0))
-  // For WhatsApp only, include the current configured fixed bill if this month has no explicit electricity obligation yet.
-  const currentElectricityForReminder = tenant.status !== 'Left' && tenant.electricity === 'Fixed' && tenant.electricityAmount > 0 && !currentElectricityObligation && tenant.joiningDate.slice(0, 7) <= month
-    ? Math.max(0, roundMoney(tenant.electricityAmount - currentElectricityPaid))
+  // Fixed electricity is recurring from its effective month. Explicit rows always win:
+  // they preserve historical rates, paid/partial receipts, and zero-value exempted months.
+  const electricityObligations = ownObligations.filter((row) => row.paymentType === 'Electricity')
+  const explicitElectricityPeriods = new Set(electricityObligations.map((row) => row.period))
+  const electricityEffectivePeriod = (tenant as Tenant & { electricityEffectivePeriod?: string }).electricityEffectivePeriod || month
+  const electricityStartPeriod = [tenant.joiningDate.slice(0, 7), electricityEffectivePeriod].sort().at(-1) || month
+  const synthesizedElectricityDue = tenant.status !== 'Left' && tenant.electricity === 'Fixed' && tenant.electricityAmount > 0
+    ? roundMoney(periodsBetween(electricityStartPeriod, month).reduce((sum, billingPeriod) => {
+        if (explicitElectricityPeriods.has(billingPeriod)) return sum
+        const billDueDate = dueDateForPeriod(tenant.dueDate || tenant.joiningDate, billingPeriod)
+        return billDueDate <= asOfDate ? sum + tenant.electricityAmount : sum
+      }, 0))
     : 0
+  // Old explicit electricity balances remain payable even after the current setting becomes Included.
+  const electricityDue = roundMoney(explicitHeadDue('Electricity') + synthesizedElectricityDue)
+
+  // WhatsApp should show this month's fixed electricity even before its due date.
+  // Explicit current-month rows (including zero-value exemptions) take priority and payments reduce the reminder balance.
+  const currentElectricityObligation = electricityObligations.find((row) => row.period === month)
+  const currentElectricityNonManagedPaid = roundMoney(ownPayments.filter((payment) => !payment.allocationManaged && payment.paymentType === 'Electricity' && payment.month === month).reduce((total, payment) => total + payment.amount, 0))
+  const currentElectricityAllPaid = roundMoney(ownPayments.filter((payment) => payment.paymentType === 'Electricity' && payment.month === month).reduce((total, payment) => total + payment.amount, 0))
+  const currentElectricityOutstanding = currentElectricityObligation
+    ? Math.max(0, roundMoney(currentElectricityObligation.agreed - Math.max(currentElectricityObligation.received, currentElectricityNonManagedPaid) - currentElectricityObligation.advanceApplied))
+    : tenant.status !== 'Left' && tenant.electricity === 'Fixed' && tenant.electricityAmount > 0 && electricityStartPeriod <= month
+      ? Math.max(0, roundMoney(tenant.electricityAmount - currentElectricityAllPaid))
+      : 0
+  const currentElectricityDueDate = currentElectricityObligation?.dueDate || dueDateForPeriod(tenant.dueDate || tenant.joiningDate, month)
+  const currentElectricityForReminder = currentElectricityDueDate > asOfDate ? currentElectricityOutstanding : 0
+
   const otherDue = explicitHeadDue('Other')
   const securityDue = Math.max(0, roundMoney(tenant.security - tenant.securityReceived))
   const credit = Math.max(0, roundMoney(ownAdvances.reduce((sum, row) => sum + (row.type === 'credit' ? row.amount : -row.amount), 0)))
@@ -93,7 +114,7 @@ export function accountReminder(name: string, account: TenantAccount): string {
     ...lines.filter(([, amount]) => amount > 0).map(([label, amount]) => `${label}: ${currency(amount)}`),
     `Total payable: ${currency(reminderTotalPayable)}`,
     ...(account.credit > 0 ? [`Unapplied advance: ${currency(account.credit)} (shown separately; please confirm allocation).`] : []),
-    ...(account.electricityNeedsReview ? ['Fixed electricity amount is missing; update the tenant before collecting electricity.'] : []),
+    ...(account.electricityNeedsReview ? ['Fixed electricity amount is missing; update the tenant before collecting or carrying electricity forward.'] : []),
     ...(account.pending > 0 ? [`Oldest unpaid rent due: ${account.dueDate}`] : []),
     'Thank you.',
   ].join('\n')
