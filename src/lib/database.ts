@@ -54,7 +54,7 @@ export async function loadAppData(): Promise<AppData> {
     branches: branches.map((r) => ({ id: r.id, name: r.name, address: r.address, active: r.active, floors: r.floors, notes: r.notes, contact: r.contact, maintenanceToken: r.maintenance_token })),
     users: profiles.map((r) => { const s = staffById.get(r.id); return { id: r.id, name: r.name, phone: r.phone || '', role: r.role === 'admin' ? 'Admin' : 'Staff', active: r.active, email: s?.email || '', username: s?.username || '', branchIds: assignments.filter((a) => a.user_id === r.id).map((a) => a.branch_id), permissions: permissions.filter((p) => p.user_id === r.id && p.allowed).map((p) => p.permission) } }),
     rooms: rooms.map((r) => ({ id: r.id, branchId: r.branch_id, number: r.number, floor: r.floor, type: r.type, beds: r.beds, rent: num(r.rent), electricity: r.electricity, electricityAmount: num(r.electricity_amount), status: r.status, notes: r.notes })),
-    tenants: tenants.map((r) => ({ id: r.id, branchId: r.branch_id, name: r.name, phone: r.phone, email: r.email || '', roomId: r.room_id, bedNo: r.bed_no, monthlyRent: num(r.monthly_rent), security: num(r.security), securityReceived: num(r.security_received), securityBalance: num(r.security_balance ?? num(r.security) - num(r.security_received)), electricity: r.electricity, electricityAmount: num(r.electricity_amount), joiningDate: r.joining_date, dueDate: r.due_date, status: r.status, idProof: r.id_proof || '', paidThisMonth: num(r.paid_this_month), notice: r.notice || undefined, left: r.left_details || undefined, rejoins: r.rejoin_history || [] })),
+    tenants: tenants.map((r) => ({ id: r.id, branchId: r.branch_id, name: r.name, phone: r.phone, email: r.email || '', roomId: r.room_id, bedNo: r.bed_no, monthlyRent: num(r.monthly_rent), security: num(r.security), securityReceived: num(r.security_received), securityBalance: num(r.security_balance ?? num(r.security) - num(r.security_received)), electricity: r.electricity, electricityAmount: num(r.electricity_amount), electricityEffectivePeriod: r.electricity_effective_period || undefined, joiningDate: r.joining_date, dueDate: r.due_date, status: r.status, idProof: r.id_proof || '', paidThisMonth: num(r.paid_this_month), notice: r.notice || undefined, left: r.left_details || undefined, rejoins: r.rejoin_history || [] })),
     payments: payments.map((r) => ({ id: r.id, branchId: r.branch_id, tenantId: r.tenant_id, amount: num(r.amount), date: r.payment_date, month: r.month, status: r.status, invoiceId: r.invoice_id || '', paymentType: normalizePaymentType(r.payment_type), paymentMode: r.payment_mode || 'Cash', description: r.description || '', allocationManaged: r.allocation_managed === true })),
     cashbook: cashbook.map((r) => ({ id: r.id, branchId: r.branch_id, type: r.type, amount: num(r.amount), description: r.description, date: r.entry_date, source: r.source, linkedId: r.linked_id || undefined, category: r.category, categoryId: r.category_id || undefined, paymentMode: r.payment_mode, reference: r.reference, remarks: r.remarks, createdAt: r.created_at })),
     expenses: expenses.map((r) => ({ id: r.id, branchId: r.branch_id, category: r.category, categoryId: r.category_id || undefined, description: r.description, amount: num(r.amount), date: r.expense_date, vendor: r.vendor || '', cashbookId: r.cashbook_entry_id || undefined, ticketId: r.maintenance_ticket_id || undefined })),
@@ -63,7 +63,7 @@ export async function loadAppData(): Promise<AppData> {
     tickets: tickets.map((r) => ({ id: r.id, branchId: r.branch_id, title: r.title, status: r.status, roomId: r.room_id, tenantId: r.tenant_id || undefined, category: r.category, priority: r.priority, raisedDate: r.raised_date, assignedTo: r.assigned_to || '', description: r.description || '', ticketNumber: r.ticket_number || undefined, resolution: r.resolution || undefined })),
     invoices: invoices.map((r) => ({ id: r.id, branchId: r.branch_id, tenantId: r.tenant_id, number: r.number, period: r.period, createdAt: r.created_at.slice(0, 10) })),
     activityLogs: logs.map((r) => ({ id: r.id, branchId: r.branch_id || '', branchName: r.branch_name, userId: r.user_id, userName: r.user_name, role: r.user_role === 'admin' ? 'Admin' : 'Staff', action: r.action_type, entity: r.module, module: r.module, actionType: r.action_type, description: r.description, metadata: r.metadata, at: r.created_at, oldValue: '', newValue: '' })).sort((a, b) => b.at.localeCompare(a.at) || b.id.localeCompare(a.id)),
-    obligations: obligations.map((r) => ({ id: r.id, branchId: r.branch_id, tenantId: r.tenant_id, period: r.period, paymentType: normalizePaymentType(r.payment_type), agreed: num(r.agreed_amount), received: num(r.received_amount), advanceApplied: num(r.advance_applied), dueDate: r.due_date, status: r.status })),
+    obligations: obligations.map((r) => ({ id: r.id, branchId: r.branch_id, tenantId: r.tenant_id, period: r.period, paymentType: normalizePaymentType(r.payment_type), agreed: num(r.agreed_amount), received: num(r.received_amount), advanceApplied: num(r.advance_applied), discountAmount: num(r.discount_amount), dueDate: r.due_date, status: r.status })),
     securityLedger: securityLedger.map((r) => ({ id: r.id, branchId: r.branch_id, tenantId: r.tenant_id, type: r.movement_type, amount: num(r.amount), date: r.movement_date, reason: r.reason })),
     advances: advances.map((r) => ({ id: r.id, branchId: r.branch_id, tenantId: r.tenant_id, type: r.movement_type, amount: num(r.amount), date: r.movement_date, period: r.period, description: r.description })),
     categories: categories.map((r) => ({ id: r.id, branchId: r.branch_id, name: r.name })),
@@ -177,7 +177,7 @@ export async function refreshTables(tables: readonly string[], currentData: AppD
   const byTable = Object.fromEntries(entries)
   const r = (table: string) => byTable[table]
   const next: AppData = { ...currentData }
-  if (r('tenants')) next.tenants = r('tenants').map((r: any) => ({ id: r.id, branchId: r.branch_id, name: r.name, phone: r.phone, email: r.email || '', roomId: r.room_id, bedNo: r.bed_no, monthlyRent: num(r.monthly_rent), security: num(r.security), securityReceived: num(r.security_received), securityBalance: num(r.security_balance ?? num(r.security) - num(r.security_received)), electricity: r.electricity, electricityAmount: num(r.electricity_amount), joiningDate: r.joining_date, dueDate: r.due_date, status: r.status, idProof: r.id_proof || '', paidThisMonth: num(r.paid_this_month), notice: r.notice || undefined, left: r.left_details || undefined, rejoins: r.rejoin_history || [] }))
+  if (r('tenants')) next.tenants = r('tenants').map((r: any) => ({ id: r.id, branchId: r.branch_id, name: r.name, phone: r.phone, email: r.email || '', roomId: r.room_id, bedNo: r.bed_no, monthlyRent: num(r.monthly_rent), security: num(r.security), securityReceived: num(r.security_received), securityBalance: num(r.security_balance ?? num(r.security) - num(r.security_received)), electricity: r.electricity, electricityAmount: num(r.electricity_amount), electricityEffectivePeriod: r.electricity_effective_period || undefined, joiningDate: r.joining_date, dueDate: r.due_date, status: r.status, idProof: r.id_proof || '', paidThisMonth: num(r.paid_this_month), notice: r.notice || undefined, left: r.left_details || undefined, rejoins: r.rejoin_history || [] }))
   if (r('rooms')) next.rooms = r('rooms').map((r: any) => ({ id: r.id, branchId: r.branch_id, number: r.number, floor: r.floor, type: r.type, beds: r.beds, rent: num(r.rent), electricity: r.electricity, electricityAmount: num(r.electricity_amount), status: r.status, notes: r.notes }))
   if (r('payments')) next.payments = r('payments').map((r: any) => ({ id: r.id, branchId: r.branch_id, tenantId: r.tenant_id, amount: num(r.amount), date: r.payment_date, month: r.month, status: r.status, invoiceId: r.invoice_id || '', paymentType: normalizePaymentType(r.payment_type), paymentMode: r.payment_mode || 'Cash', description: r.description || '', allocationManaged: r.allocation_managed === true }))
   if (r('cashbook_entries')) next.cashbook = r('cashbook_entries').map((r: any) => ({ id: r.id, branchId: r.branch_id, type: r.type, amount: num(r.amount), description: r.description, date: r.entry_date, source: r.source, linkedId: r.linked_id || undefined, category: r.category, categoryId: r.category_id || undefined, paymentMode: r.payment_mode, reference: r.reference, remarks: r.remarks, createdAt: r.created_at }))
@@ -234,20 +234,22 @@ const databaseError = (operation: string, error: { message?: string; code?: stri
   return new Error(friendlyDbError(error))
 }
 
-export async function recordSplitPayment(input: { requestId: string; tenantId: string; branchId: string; rentAmount: number; securityAmount: number; electricityAmount: number; otherAmount: number; paymentDate: string; rentPeriod?: string; paymentMode: string; description: string }) {
+export async function recordSplitPayment(input: { requestId: string; tenantId: string; branchId: string; rentAmount: number; rentDiscountAmount?: number; securityAmount: number; electricityAmount: number; electricityAction?: string; otherAmount: number; paymentDate: string; rentPeriod?: string; paymentMode: string; description: string }) {
   const payload = {
     p_request_id: input.requestId, p_tenant_id: input.tenantId, p_branch_id: input.branchId,
     p_rent_amount: input.rentAmount, p_security_amount: input.securityAmount,
     p_electricity_amount: input.electricityAmount, p_other_amount: input.otherAmount,
     p_payment_date: input.paymentDate, p_rent_period: input.rentPeriod || input.paymentDate.slice(0, 7),
     p_payment_mode: input.paymentMode, p_description: input.description || null,
+    p_electricity_action: input.electricityAction || 'auto',
+    p_rent_discount_amount: input.rentDiscountAmount || 0,
   }
-  let response = await supabase.rpc('record_split_payment_v3', payload)
+  let response = await supabase.rpc('record_split_payment_v5', payload)
   for (let attempt = 2; response.error && isTransientNetworkError(response.error) && attempt <= 3; attempt += 1) {
     await new Promise((resolve) => window.setTimeout(resolve, 400 * (attempt - 1)))
-    response = await supabase.rpc('record_split_payment_v3', payload)
+    response = await supabase.rpc('record_split_payment_v5', payload)
   }
-  if (response.error) throw databaseError('record_split_payment_v3 RPC', response.error)
+  if (response.error) throw databaseError('record_split_payment_v5 RPC', response.error)
   return response.data
 }
 
