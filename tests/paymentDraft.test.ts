@@ -18,3 +18,8 @@ it('does not restore extra identity or credential fields', () => {
   expect(restored).not.toHaveProperty('password')
   expect(restored).not.toHaveProperty('idProof')
 })
+it('preserves a period rent discount and rejects an invalid discount draft', () => {
+  const discounted = { ...draft, rentDiscountAmount: 1000 }
+  expect(decodePaymentDraft(encodePaymentDraft(discounted))?.rentDiscountAmount).toBe(1000)
+  expect(decodePaymentDraft(encodePaymentDraft({ ...draft, rentDiscountAmount: -1 }))).toBeUndefined()
+})

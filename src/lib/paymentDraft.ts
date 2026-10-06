@@ -3,7 +3,7 @@ export const DRAFT_TTL = 24 * 60 * 60 * 1000
 export type ElectricityPaymentAction = 'auto' | 'paid' | 'pending' | 'exempted' | 'settle-existing' | 'included'
 export type PaymentDraft = {
   requestId: string; tenantId: string; paymentMode: string; paymentDate: string;
-  rentAmount: number; securityAmount: number; electricityAmount: number; otherAmount: number;
+  rentAmount: number; rentDiscountAmount?: number; securityAmount: number; electricityAmount: number; otherAmount: number;
   description: string; attempted: boolean; rentPeriod?: string; electricityAction?: ElectricityPaymentAction;
 }
 export const paymentDraftKey = (user: string, branch: string, tenant: string) => DRAFT_PREFIX + JSON.stringify([user, branch, tenant || 'new'])
@@ -16,9 +16,11 @@ export function decodePaymentDraft(raw: string | null, now = Date.now()): Paymen
     if (!d || !/^[a-f0-9-]{36}$/i.test(d.requestId) || typeof d.tenantId !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(d.paymentDate)) return
     if (!['Cash', 'UPI', 'Bank Transfer', 'Card'].includes(d.paymentMode) || typeof d.attempted !== 'boolean' || typeof d.description !== 'string') return
     if (![d.rentAmount, d.securityAmount, d.electricityAmount, d.otherAmount].every((n) => typeof n === 'number' && Number.isFinite(n) && n >= 0)) return
+    const rentDiscountAmount = d.rentDiscountAmount === undefined ? undefined : d.rentDiscountAmount
+    if (rentDiscountAmount !== undefined && (typeof rentDiscountAmount !== 'number' || !Number.isFinite(rentDiscountAmount) || rentDiscountAmount < 0)) return
     const electricityAction = ['auto', 'paid', 'pending', 'exempted', 'settle-existing', 'included'].includes(d.electricityAction) ? d.electricityAction as ElectricityPaymentAction : undefined
     // Explicit allowlist prevents passwords, identity documents or unexpected fields restoring.
-    return { requestId: d.requestId, tenantId: d.tenantId, paymentMode: d.paymentMode, paymentDate: d.paymentDate, rentAmount: d.rentAmount, securityAmount: d.securityAmount, electricityAmount: d.electricityAmount, otherAmount: d.otherAmount, description: d.description.slice(0, 2000), attempted: d.attempted, rentPeriod: typeof d.rentPeriod === 'string' && /^\d{4}-\d{2}$/.test(d.rentPeriod) ? d.rentPeriod : undefined, ...(electricityAction ? { electricityAction } : {}) }
+    return { requestId: d.requestId, tenantId: d.tenantId, paymentMode: d.paymentMode, paymentDate: d.paymentDate, rentAmount: d.rentAmount, ...(rentDiscountAmount !== undefined ? { rentDiscountAmount } : {}), securityAmount: d.securityAmount, electricityAmount: d.electricityAmount, otherAmount: d.otherAmount, description: d.description.slice(0, 2000), attempted: d.attempted, rentPeriod: typeof d.rentPeriod === 'string' && /^\d{4}-\d{2}$/.test(d.rentPeriod) ? d.rentPeriod : undefined, ...(electricityAction ? { electricityAction } : {}) }
   } catch { return }
 }
 export function encodePaymentDraft(value: PaymentDraft, now = Date.now()) {
