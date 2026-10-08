@@ -1,0 +1,52 @@
+name: Apply tenant serial number
+
+on:
+  push:
+    branches: [feat/tenant-list-serial-number]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/tenant-list-serial-number
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Apply deterministic patch
+        run: python scripts/apply-tenant-serial-number.py
+      - name: Verify serial number UI markers
+        run: |
+          grep -F "['S.No.', 'Tenant name'" src/App.tsx
+          grep -F "['S.No.', 'Tenant', 'Room'" src/App.tsx
+          grep -F "{index + 1}" src/App.tsx
+      - name: Install
+        run: npm ci
+      - name: Self test
+        run: npm run self-test
+      - name: Unit and integration tests
+        run: npm test
+      - name: Build
+        run: npm run build
+      - name: Lint
+        run: npm run lint
+      - name: Diff check
+        run: git diff --check
+      - name: Commit verified feature
+        run: |
+          rm scripts/apply-tenant-serial-number.py .github/workflows/apply-tenant-serial-number.yml
+          git config user.name "pg95-bot"
+          git config user.email "pg95-bot@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Add serial numbers to tenant lists"
+            git push origin HEAD:feat/tenant-list-serial-number
+          fi
