@@ -1,0 +1,48 @@
+name: Apply tenant paid filter fix
+
+on:
+  push:
+    branches:
+      - fix/tenant-paid-filter-current-month
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: "${{ github.event.head_commit.message == 'chore: apply tenant paid filter fix' }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Apply deterministic fix
+        run: python3 scripts/apply-tenant-paid-filter-fix.py
+      - name: Install
+        run: npm ci
+      - name: Self test
+        run: npm run self-test
+      - name: Unit and integration tests
+        run: npm test
+      - name: Build
+        run: npm run build
+      - name: Lint
+        run: npm run lint
+      - name: Diff check
+        run: git diff --check
+      - name: Commit verified fix
+        shell: bash
+        run: |
+          rm -f scripts/apply-tenant-paid-filter-fix.py .github/workflows/apply-tenant-paid-filter-fix.yml
+          git config user.name pg95-bot
+          git config user.email pg95-bot@users.noreply.github.com
+          git add -A
+          git commit -m "Fix tenant Paid filter to use cleared rent periods"
+          git push origin HEAD:fix/tenant-paid-filter-current-month
