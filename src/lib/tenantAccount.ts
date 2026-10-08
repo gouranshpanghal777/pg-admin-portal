@@ -103,13 +103,15 @@ export function tenantAccount(tenant: Tenant, payments: Payment[], obligations: 
 export type TenantAccount = ReturnType<typeof tenantAccount>
 
 /**
- * Paid means the tenant has cleared every rent period through the current calendar month.
- * This deliberately does not use account.status: status can be Clear/Upcoming while the
- * current month's rent is still unpaid but not due yet.
+ * Paid means this calendar month's rent has actually become due and is fully cleared,
+ * with no older rent balance left. A future-due current month must never appear as Paid,
+ * even when the outstanding-only server snapshot omits that future obligation.
  */
-export function isRentPaidThroughCurrentMonth(account: TenantAccount, month = account.asOfDate.slice(0, 7)) {
+export function isRentPaidThroughCurrentMonth(account: TenantAccount, month = account.asOfDate.slice(0, 7), asOfDate = account.asOfDate) {
   const throughMonth = account.rentLines.filter((line) => line.period <= month)
-  return throughMonth.length > 0 && throughMonth.every((line) => line.pending <= 0)
+  const currentMonthLine = throughMonth.find((line) => line.period === month)
+  if (!currentMonthLine || currentMonthLine.dueDate > asOfDate || currentMonthLine.pending > 0) return false
+  return throughMonth.filter((line) => line.period < month).every((line) => line.pending <= 0)
 }
 
 export function accountReminder(name: string, account: TenantAccount): string {
