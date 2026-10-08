@@ -11,7 +11,7 @@ import { businessDate } from './lib/businessDate'
 import { paymentDraftKey, purgePaymentDrafts } from './lib/paymentDraft'
 import type { ElectricityPaymentAction } from './lib/paymentDraft'
 import { usePaymentDraft } from './features/usePaymentDraft'
-import { accountReminder, tenantAccount } from './lib/tenantAccount'
+import { accountReminder, isRentPaidThroughCurrentMonth, tenantAccount } from './lib/tenantAccount'
 import type { RentSnapshot } from './lib/tenantAccount'
 import {
   AlertTriangle,
@@ -1195,7 +1195,9 @@ function TenantsPage({ data, scoped, tenantTab, setTenantTab, filter, setFilter,
     if (filter === 'All') return true
     if (filter === 'Vacating Notice') return tenant.status === 'Notice'
     if (filter === 'Vacate Due') return !!tenant.notice?.expectedLeavingDate && today >= tenant.notice.expectedLeavingDate
-    return scoped.rentStates.get(tenant.id)?.status === filter
+    const rentState = scoped.rentStates.get(tenant.id)
+    if (filter === 'Paid') return !!rentState && isRentPaidThroughCurrentMonth(rentState)
+    return rentState?.status === filter
   })
   const totalSecurityHeld = scoped.activeTenants.reduce((sum, tenant) => sum + tenant.security, 0)
   const searched = useMemo(() => {
@@ -1254,7 +1256,12 @@ function RoomsPage({ scoped, roomFloor, setRoomFloor, setSelectedRoomId, setModa
 }
 
 function PaymentsPage({ data, scoped, filter, setFilter, setModal, setSelectedTenantId, canAdd }: { data: AppData; scoped: ReturnType<typeof branchData>; filter: string; setFilter: (value: string) => void; setModal: (value: string) => void; setSelectedTenantId: (id: string) => void; canAdd: boolean }) {
-  const tenants = filter === 'Left PG' ? scoped.leftTenants : scoped.activeTenants.filter((tenant) => filter === 'All' || scoped.rentStates.get(tenant.id)?.status === filter)
+  const tenants = filter === 'Left PG' ? scoped.leftTenants : scoped.activeTenants.filter((tenant) => {
+    if (filter === 'All') return true
+    const rentState = scoped.rentStates.get(tenant.id)
+    if (filter === 'Paid') return !!rentState && isRentPaidThroughCurrentMonth(rentState)
+    return rentState?.status === filter
+  })
   const collected = paymentTotal(scoped.payments)
   const rentCollected = paymentTotal(scoped.payments, 'Rent')
   const securityCollected = paymentTotal(scoped.payments, 'Security Deposit')
@@ -1426,7 +1433,7 @@ function ReportsPage({ scoped, data, branch, reportRange, setReportRange, onExpo
   const securityReceived = paymentTotal(scoped.payments, 'Security Deposit')
   const electricityReceived = paymentTotal(scoped.payments, 'Electricity')
   const otherReceived = paymentTotal(scoped.payments, 'Other')
-  const paidTenants = scoped.activeTenants.filter((tenant) => ['Paid', 'Clear'].includes(scoped.rentStates.get(tenant.id)?.status || '')).length
+  const paidTenants = scoped.activeTenants.filter((tenant) => { const rentState = scoped.rentStates.get(tenant.id); return !!rentState && isRentPaidThroughCurrentMonth(rentState) }).length
   const pendingTenants = scoped.activeTenants.filter((tenant) => scoped.rentStates.get(tenant.id)?.status === 'Pending').length
   const overdueTenants = scoped.activeTenants.filter((tenant) => scoped.rentStates.get(tenant.id)?.status === 'Overdue').length
   const categoryExpenses = Object.entries(scoped.expenses.reduce<Record<string, number>>((acc, expense) => ({ ...acc, [expense.category]: (acc[expense.category] || 0) + expense.amount }), {}))

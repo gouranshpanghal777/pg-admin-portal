@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Payment, PaymentObligation, Tenant } from '../src/App'
-import { accountReminder, tenantAccount } from '../src/lib/tenantAccount'
+import { accountReminder, isRentPaidThroughCurrentMonth, tenantAccount } from '../src/lib/tenantAccount'
 
 const tenant: Tenant = { id: 't1', branchId: 'b1', name: 'TEST TENANT', phone: '', email: '', roomId: 'r1', bedNo: 1, monthlyRent: 6500, security: 0, securityReceived: 0, securityBalance: 0, electricity: 'Included', electricityAmount: 350, joiningDate: '2026-08-15', dueDate: '2026-08-15', status: 'Active', idProof: '', paidThisMonth: 0 }
 const obligation = (period: string, received = 0, head: PaymentObligation['paymentType'] = 'Rent', agreed = 6500): PaymentObligation => ({ id: period + head, tenantId: 't1', branchId: 'b1', period, paymentType: head, agreed, received, advanceApplied: 0, dueDate: `${period}-15`, status: 'Pending' })
@@ -72,5 +72,26 @@ describe('canonical tenant account', () => {
     expect(message).toContain('Previous rent balance: ₹600')
     expect(message).toContain('Electricity due: ₹350')
     expect(message).toContain('Total payable: ₹7,450')
+  })
+})
+
+describe('tenant Paid filter classification', () => {
+  it('includes a tenant whose rent is cleared through the current month', () => {
+    const account = tenantAccount(tenant, [], [obligation('2026-08', 6500), obligation('2026-09', 6500)], [], '2026-09-16')
+    expect(account.status).toBe('Clear')
+    expect(isRentPaidThroughCurrentMonth(account)).toBe(true)
+  })
+
+  it('does not mark a future-due but unpaid current month as Paid', () => {
+    const laterDueTenant = { ...tenant, dueDate: '2026-08-20' }
+    const account = tenantAccount(laterDueTenant, [], [obligation('2026-08', 6500), { ...obligation('2026-09'), dueDate: '2026-09-20' }], [], '2026-09-15')
+    expect(account.pending).toBe(0)
+    expect(account.rentLines.find((line) => line.period === '2026-09')?.pending).toBe(6500)
+    expect(isRentPaidThroughCurrentMonth(account)).toBe(false)
+  })
+
+  it('treats a fully exempted current month as cleared rent', () => {
+    const account = tenantAccount(tenant, [], [obligation('2026-08', 6500), { ...obligation('2026-09', 0, 'Rent', 0), discountAmount: 6500 }], [], '2026-09-16')
+    expect(isRentPaidThroughCurrentMonth(account)).toBe(true)
   })
 })
