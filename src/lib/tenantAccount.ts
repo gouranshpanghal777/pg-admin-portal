@@ -114,6 +114,39 @@ export function isRentPaidThroughCurrentMonth(account: TenantAccount, month = ac
   return throughMonth.filter((line) => line.period < month).every((line) => line.pending <= 0)
 }
 
+/** Remaining rent for one period using the underlying agreed/received values.
+ * This intentionally reconstructs the amount instead of trusting line.pending because
+ * the read-only server snapshot contains outstanding rows only and can omit future-due rent.
+ */
+export function rentLineOutstanding(line: AccountLine) {
+  return Math.max(0, roundMoney(line.agreed - line.received - line.advanceApplied))
+}
+
+export function currentMonthRentOutstanding(account: TenantAccount, month = account.asOfDate.slice(0, 7)) {
+  const line = account.rentLines.find((item) => item.period === month)
+  return line ? rentLineOutstanding(line) : 0
+}
+
+/** Pending tab is a month-end view: any uncleared current-month rent belongs here,
+ * even when its due date is later this month. */
+export function isRentPendingInCurrentMonth(account: TenantAccount, month = account.asOfDate.slice(0, 7)) {
+  return currentMonthRentOutstanding(account, month) > 0
+}
+
+/** Upcoming Rent starts exactly five days before the current month's due date. */
+export function isRentUpcomingWithinDays(account: TenantAccount, days = 5, month = account.asOfDate.slice(0, 7), asOfDate = account.asOfDate) {
+  const line = account.rentLines.find((item) => item.period === month)
+  if (!line || rentLineOutstanding(line) <= 0) return false
+  const daysAway = calendarDays(asOfDate, line.dueDate)
+  return daysAway > 0 && daysAway <= days
+}
+
+export function rentOutstandingThroughCurrentMonth(account: TenantAccount, month = account.asOfDate.slice(0, 7)) {
+  return roundMoney(account.rentLines
+    .filter((line) => line.period <= month)
+    .reduce((sum, line) => sum + rentLineOutstanding(line), 0))
+}
+
 export function accountReminder(name: string, account: TenantAccount): string {
   const currency = (value: number) => `₹${value.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`
   const reminderElectricityDue = roundMoney(account.electricityDue + account.currentElectricityForReminder)
