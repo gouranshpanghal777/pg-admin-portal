@@ -82,11 +82,26 @@ describe('tenant Paid filter classification', () => {
     expect(isRentPaidThroughCurrentMonth(account)).toBe(true)
   })
 
-  it('does not mark a future-due but unpaid current month as Paid', () => {
-    const laterDueTenant = { ...tenant, dueDate: '2026-08-20' }
+  it('does not mark a future-due current month as Paid even when the server snapshot omits it', () => {
+    const laterDueTenant = {
+      ...tenant,
+      dueDate: '2026-08-20',
+      rentSnapshot: { asOfDate: '2026-09-15', lines: [] },
+    }
     const account = tenantAccount(laterDueTenant, [], [obligation('2026-08', 6500), { ...obligation('2026-09'), dueDate: '2026-09-20' }], [], '2026-09-15')
     expect(account.pending).toBe(0)
-    expect(account.rentLines.find((line) => line.period === '2026-09')?.pending).toBe(6500)
+    expect(account.rentLines.find((line) => line.period === '2026-09')?.pending).toBe(0)
+    expect(account.rentLines.find((line) => line.period === '2026-09')?.dueDate).toBe('2026-09-20')
+    expect(isRentPaidThroughCurrentMonth(account)).toBe(false)
+  })
+
+  it('marks a cleared current month Paid on or after its due date', () => {
+    const account = tenantAccount(tenant, [], [obligation('2026-08', 6500), obligation('2026-09', 6500)], [], '2026-09-15')
+    expect(isRentPaidThroughCurrentMonth(account)).toBe(true)
+  })
+
+  it('does not mark current month Paid while an older rent balance remains', () => {
+    const account = tenantAccount(tenant, [], [obligation('2026-08', 6400), obligation('2026-09', 6500)], [], '2026-09-16')
     expect(isRentPaidThroughCurrentMonth(account)).toBe(false)
   })
 
