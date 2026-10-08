@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Payment, PaymentObligation, Tenant } from '../src/App'
-import { accountReminder, isRentPaidThroughCurrentMonth, tenantAccount } from '../src/lib/tenantAccount'
+import { accountReminder, currentMonthRentOutstanding, isRentPaidThroughCurrentMonth, isRentPendingInCurrentMonth, isRentUpcomingWithinDays, rentOutstandingThroughCurrentMonth, tenantAccount } from '../src/lib/tenantAccount'
 
 const tenant: Tenant = { id: 't1', branchId: 'b1', name: 'TEST TENANT', phone: '', email: '', roomId: 'r1', bedNo: 1, monthlyRent: 6500, security: 0, securityReceived: 0, securityBalance: 0, electricity: 'Included', electricityAmount: 350, joiningDate: '2026-08-15', dueDate: '2026-08-15', status: 'Active', idProof: '', paidThisMonth: 0 }
 const obligation = (period: string, received = 0, head: PaymentObligation['paymentType'] = 'Rent', agreed = 6500): PaymentObligation => ({ id: period + head, tenantId: 't1', branchId: 'b1', period, paymentType: head, agreed, received, advanceApplied: 0, dueDate: `${period}-15`, status: 'Pending' })
@@ -108,5 +108,40 @@ describe('tenant Paid filter classification', () => {
   it('treats a fully exempted current month as cleared rent', () => {
     const account = tenantAccount(tenant, [], [obligation('2026-08', 6500), { ...obligation('2026-09', 0, 'Rent', 0), discountAmount: 6500 }], [], '2026-09-16')
     expect(isRentPaidThroughCurrentMonth(account)).toBe(true)
+  })
+})
+
+describe('tenant month-end Pending and 5-day Upcoming filters', () => {
+  it('keeps future-due current-month rent in Pending even when the outstanding-only snapshot omits it', () => {
+    const laterDueTenant = {
+      ...tenant,
+      dueDate: '2026-08-20',
+      rentSnapshot: { asOfDate: '2026-09-15', lines: [] },
+    }
+    const account = tenantAccount(laterDueTenant, [], [obligation('2026-08', 6500), { ...obligation('2026-09'), dueDate: '2026-09-20' }], [], '2026-09-15')
+    expect(account.pending).toBe(0)
+    expect(currentMonthRentOutstanding(account)).toBe(6500)
+    expect(rentOutstandingThroughCurrentMonth(account)).toBe(6500)
+    expect(isRentPendingInCurrentMonth(account)).toBe(true)
+  })
+
+  it('shows unpaid rent in Upcoming exactly from 5 days before its due date', () => {
+    const account = tenantAccount({ ...tenant, dueDate: '2026-08-20' }, [], [obligation('2026-08', 6500), { ...obligation('2026-09'), dueDate: '2026-09-20' }], [], '2026-09-15')
+    expect(isRentUpcomingWithinDays(account, 5)).toBe(true)
+  })
+
+  it('does not show rent in Upcoming six days before due, but still keeps it Pending for the month', () => {
+    const account = tenantAccount({ ...tenant, dueDate: '2026-08-21' }, [], [obligation('2026-08', 6500), { ...obligation('2026-09'), dueDate: '2026-09-21' }], [], '2026-09-15')
+    expect(isRentUpcomingWithinDays(account, 5)).toBe(false)
+    expect(isRentPendingInCurrentMonth(account)).toBe(true)
+  })
+
+  it('does not show cleared or fully exempted current-month rent as Pending or Upcoming', () => {
+    const paid = tenantAccount(tenant, [], [obligation('2026-08', 6500), obligation('2026-09', 6500)], [], '2026-09-10')
+    const exempt = tenantAccount(tenant, [], [obligation('2026-08', 6500), { ...obligation('2026-09', 0, 'Rent', 0), discountAmount: 6500 }], [], '2026-09-10')
+    expect(isRentPendingInCurrentMonth(paid)).toBe(false)
+    expect(isRentUpcomingWithinDays(paid, 5)).toBe(false)
+    expect(isRentPendingInCurrentMonth(exempt)).toBe(false)
+    expect(isRentUpcomingWithinDays(exempt, 5)).toBe(false)
   })
 })

@@ -11,7 +11,7 @@ import { businessDate } from './lib/businessDate'
 import { paymentDraftKey, purgePaymentDrafts } from './lib/paymentDraft'
 import type { ElectricityPaymentAction } from './lib/paymentDraft'
 import { usePaymentDraft } from './features/usePaymentDraft'
-import { accountReminder, isRentPaidThroughCurrentMonth, tenantAccount } from './lib/tenantAccount'
+import { accountReminder, isRentPaidThroughCurrentMonth, isRentPendingInCurrentMonth, isRentUpcomingWithinDays, rentOutstandingThroughCurrentMonth, tenantAccount } from './lib/tenantAccount'
 import type { RentSnapshot } from './lib/tenantAccount'
 import {
   AlertTriangle,
@@ -1197,6 +1197,8 @@ function TenantsPage({ data, scoped, tenantTab, setTenantTab, filter, setFilter,
     if (filter === 'Vacate Due') return !!tenant.notice?.expectedLeavingDate && today >= tenant.notice.expectedLeavingDate
     const rentState = scoped.rentStates.get(tenant.id)
     if (filter === 'Paid') return !!rentState && isRentPaidThroughCurrentMonth(rentState)
+    if (filter === 'Upcoming Rent') return !!rentState && isRentUpcomingWithinDays(rentState, 5)
+    if (filter === 'Pending') return !!rentState && isRentPendingInCurrentMonth(rentState)
     return rentState?.status === filter
   })
   const totalSecurityHeld = scoped.activeTenants.reduce((sum, tenant) => sum + tenant.security, 0)
@@ -1217,7 +1219,7 @@ function TenantsPage({ data, scoped, tenantTab, setTenantTab, filter, setFilter,
       <div className="flex items-center justify-end"><Button tone="soft" onClick={() => setModal('fiveMonthRegister')}><FileBarChart size={16} /> 5 Month Register</Button></div>
       {tenantTab === 'Active' ? <>
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Metric icon={<ShieldCheck />} label="Total Security Held" value={money(totalSecurityHeld)} /></div>
-        <Tabs values={['All', 'Paid', 'Pending', 'Overdue', 'Vacating Notice', 'Vacate Due']} value={filter} onChange={setFilter} />
+        <Tabs values={['All', 'Paid', 'Upcoming Rent', 'Pending', 'Overdue', 'Vacating Notice', 'Vacate Due']} value={filter} onChange={setFilter} />
         <div className="relative">
           <Search className="absolute left-3 top-2.5 text-slate-400" size={18} />
           <input value={tenantSearch} onChange={(e) => setTenantSearch(e.target.value)} className={`${inputClass} w-full pl-10 pr-10`} placeholder="Search tenant, mobile or room..." />
@@ -1227,11 +1229,12 @@ function TenantsPage({ data, scoped, tenantTab, setTenantTab, filter, setFilter,
           {displayList.map((tenant, index) => {
             const room = data.rooms.find((item) => item.id === tenant.roomId)!
             const rentState = scoped.rentStates.get(tenant.id)!
-            const calculatedRentDueDate = getCalculatedRentDueDate(tenant, scoped.payments, scoped.obligations)
-            const balance = rentState.pending
+            const currentMonthRentLine = rentState.rentLines.find((line) => line.period === currentMonth)
+            const calculatedRentDueDate = currentMonthRentLine?.dueDate || getCalculatedRentDueDate(tenant, scoped.payments, scoped.obligations)
+            const balance = rentOutstandingThroughCurrentMonth(rentState)
             const securityReceived = tenant.securityReceived
             const securityBalance = Math.max(0, tenant.security - tenant.securityReceived)
-            const status = rentState.status
+            const status = rentState.overdue > 0 ? 'Overdue' : isRentUpcomingWithinDays(rentState, 5) ? 'Upcoming' : isRentPendingInCurrentMonth(rentState) ? 'Pending' : rentState.status
             const whatsapp = `https://wa.me/91${tenant.phone.replace(/\D/g, '').slice(-10)}?text=${encodeURIComponent(accountReminder(tenant.name, rentState))}`
             const vacateDueDayCount = tenant.notice?.expectedLeavingDate ? vacateDueDays(tenant.notice.expectedLeavingDate) : null
             const isVacateDue = vacateDueDayCount !== null && vacateDueDayCount >= 0
