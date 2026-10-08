@@ -1,0 +1,46 @@
+name: Apply paid due-date fix
+
+on:
+  push:
+    branches:
+      - fix/paid-filter-due-and-cleared
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'pg95-bot'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/paid-filter-due-and-cleared
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Apply deterministic fix
+        run: python3 scripts/apply-paid-due-date-fix.py
+      - name: Install
+        run: npm ci
+      - name: Self test
+        run: npm run self-test
+      - name: Unit and integration tests
+        run: npm test
+      - name: Build
+        run: npm run build
+      - name: Lint
+        run: npm run lint
+      - name: Diff check
+        run: git diff --check
+      - name: Commit verified fix
+        run: |
+          rm scripts/apply-paid-due-date-fix.py
+          rm .github/workflows/apply-paid-due-date-fix.yml
+          git config user.name "pg95-bot"
+          git config user.email "pg95-bot@users.noreply.github.com"
+          git add -A
+          git commit -m "Require current rent due date before Paid classification"
+          git push origin HEAD:fix/paid-filter-due-and-cleared
