@@ -69,6 +69,7 @@ import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable/es'
 import QRCode from 'qrcode'
 import { createMaintenancePoster, downloadMaintenancePoster, printMaintenancePoster } from './features/maintenancePoster'
+import PushNotifications from './features/PushNotifications'
 
 export type Role = 'Admin' | 'Staff'
 type Page =
@@ -580,7 +581,7 @@ function App() {
   const [backendError, setBackendError] = useState('')
   const [successMessage, setSuccessMessage] = useState('')
   const [branchId, setBranchId] = useState<string>('')
-  const [page, setPage] = useState<Page>('Dashboard')
+  const [page, setPage] = useState<Page>(new URLSearchParams(window.location.search).has('maintenance') ? 'Maintenance' : 'Dashboard')
   const [role, setRole] = useState<Role>('Admin')
   const [query, setQuery] = useState('')
   const [modal, setModal] = useState<string>('')
@@ -679,6 +680,14 @@ function App() {
   }, [branchId])
 
   useEffect(() => { refreshRentSummary() }, [refreshRentSummary])
+
+  useEffect(() => {
+    const onNotification = (event: MessageEvent) => {
+      if (event.data?.type === 'PG95_OPEN_MAINTENANCE') { setPage('Maintenance'); setTicketFilter('All') }
+    }
+    navigator.serviceWorker?.addEventListener('message', onNotification)
+    return () => navigator.serviceWorker?.removeEventListener('message', onNotification)
+  }, [])
 
   useEffect(() => {
     if (!initializedRef.current) {
@@ -989,6 +998,7 @@ function App() {
         </header>
 
         <main className="p-3 lg:p-6" style={{ minHeight: 'calc(100dvh - 3.5rem - env(safe-area-inset-top, 0px))' }}>
+          {sessionUserId && branchId && <PushNotifications userId={sessionUserId} branchId={branchId} />}
           {newTicketAlert && <div role="alert" className="no-print mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border-2 border-amber-400 bg-amber-50 p-4 shadow-lg">
             <div><p className="font-bold text-amber-950">🔔 New Maintenance Complaint / नई शिकायत</p>
               <p className="text-sm text-amber-900">Ticket {newTicketAlert.ticketNumber || newTicketAlert.id} · Room {data.rooms.find(room => room.id === newTicketAlert.roomId)?.number || '—'} · {newTicketAlert.title}</p>

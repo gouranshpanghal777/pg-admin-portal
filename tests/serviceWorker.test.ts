@@ -31,7 +31,7 @@ it('activation removes only old PG95 shell caches', async () => {
   let work: Promise<void> | undefined
   listeners.get('activate')!({ waitUntil: (promise: Promise<void>) => { work = promise } })
   await work
-  expect(remove.mock.calls).toEqual([['pg95-shell-v9']])
+  expect(remove.mock.calls).toEqual([['pg95-shell-v9'], ['pg95-shell-v10']])
 })
 it('does not intercept Supabase or non-GET requests', () => {
   const { listeners } = worker()
