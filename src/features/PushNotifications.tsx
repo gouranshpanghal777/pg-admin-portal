@@ -11,6 +11,7 @@ export default function PushNotifications({ userId, branchIds }: Props) {
   const [status, setStatus] = useState('')
   const [enabled, setEnabled] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [testing, setTesting] = useState(false)
   useEffect(() => {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) return
     void navigator.serviceWorker.ready.then(r => r.pushManager.getSubscription()).then(async subscription => {
@@ -42,6 +43,24 @@ export default function PushNotifications({ userId, branchIds }: Props) {
     } catch(e) { setStatus(e instanceof Error ? e.message : 'Could not enable notifications') }
     finally { setBusy(false) }
   }
+  async function sendTest() {
+    setTesting(true)
+    setStatus('')
+    try {
+      if (Notification.permission !== 'granted') throw new Error('Please allow notifications on this phone first.')
+      const { data, error } = await supabase.functions.invoke('pg95-maintenance-push', {
+        body: { mode: 'test' },
+      })
+      if (error) throw new Error('Push test server failed: ' + error.message)
+      if (!data?.sent) {
+        const errors = Array.isArray(data?.errors) ? data.errors.map((item: { status?: number; message?: string }) => item.status ? 'HTTP ' + item.status : (item.message || 'provider error')).join(', ') : ''
+        throw new Error(data?.error || ('Push service rejected notification. ' + (errors || 'Check the phone subscription.')))
+      }
+      setStatus('Test push accepted by provider. Lock the phone and check notifications. / Test push भेज दी गई है।')
+    } catch (e) {
+      setStatus(e instanceof Error ? e.message : 'Could not test notification')
+    } finally { setTesting(false) }
+  }
   async function disable() {
     setBusy(true)
     try {
@@ -62,6 +81,10 @@ export default function PushNotifications({ userId, branchIds }: Props) {
       className="min-h-10 rounded-md bg-blue-700 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">
       {busy ? 'Please wait…' : enabled ? 'Disable phone notifications' : 'Enable phone notifications'}
     </button>
+    {enabled && <button type="button" disabled={busy || testing} onClick={() => void sendTest()}
+      className="min-h-10 rounded-md border border-blue-600 bg-white px-3 py-2 text-sm font-semibold text-blue-900 disabled:opacity-50">
+      {testing ? 'Testing…' : '🔔 Send test notification'}
+    </button>}
     {status && <span role="status" className="text-xs text-blue-900">{status}</span>}
   </div>
 }
