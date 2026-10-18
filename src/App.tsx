@@ -756,19 +756,59 @@ function App() {
     closeModal()
   }
 
-  // Public QR tickets are inserted directly by the database, outside the admin's
-  // optimistic write queue. Refresh only tickets while viewing Maintenance.
+  // Watch public QR submissions throughout the app, not just on Maintenance.
+  // Realtime is best-effort; periodic reconciliation handles missed events.
+  const [newTicketAlert, setNewTicketAlert] = useState<MaintenanceTicket | null>(null)
+  const [ticketSoundEnabled, setTicketSoundEnabled] = useState(false)
+  const ticketSoundRef = useRef(false)
+  ticketSoundRef.current = ticketSoundEnabled
+  const playTicketSound = () => {
+    try {
+      const AudioContextClass = window.AudioContext
+      if (!AudioContextClass) return
+      const context = new AudioContextClass()
+      void context.resume().then(() => {
+        const oscillator = context.createOscillator()
+        const gain = context.createGain()
+        oscillator.type = 'sine'
+        oscillator.frequency.setValueAtTime(880, context.currentTime)
+        oscillator.frequency.setValueAtTime(1100, context.currentTime + 0.15)
+        gain.gain.setValueAtTime(0.001, context.currentTime)
+        gain.gain.exponentialRampToValueAtTime(0.12, context.currentTime + 0.02)
+        gain.gain.exponentialRampToValueAtTime(0.001, context.currentTime + 0.38)
+        oscillator.connect(gain).connect(context.destination)
+        oscillator.start()
+        oscillator.stop(context.currentTime + 0.4)
+        oscillator.onended = () => { void context.close() }
+      }).catch(() => { void context.close() })
+    } catch { /* Audio may be restricted by the browser. */ }
+  }
+
   useEffect(() => {
-    if (!sessionUserId || !branchId || page !== 'Maintenance') return
+    if (!sessionUserId || !branchId) return
     let stopped = false
     let inFlight = false
+    let initialized = false
+    const knownIds = new Set<string>()
     const refreshPublicTickets = async () => {
-      if (inFlight) return
+      if (inFlight || stopped) return
       inFlight = true
       try {
         await persistenceQueue.current
         const fresh = await refreshTables(['maintenance_tickets'], dataRef.current)
         if (stopped) return
+        const branchTickets = fresh.tickets.filter(ticket => ticket.branchId === branchId)
+        if (!initialized) {
+          branchTickets.forEach(ticket => knownIds.add(ticket.id))
+          initialized = true
+        } else {
+          const incoming = branchTickets.filter(ticket => !knownIds.has(ticket.id))
+          incoming.forEach(ticket => knownIds.add(ticket.id))
+          if (incoming.length) {
+            setNewTicketAlert(incoming[0])
+            if (ticketSoundRef.current) playTicketSound()
+          }
+        }
         if (JSON.stringify(fresh.tickets) !== JSON.stringify(dataRef.current.tickets)) {
           const updated = { ...dataRef.current, tickets: fresh.tickets }
           dataRef.current = updated
@@ -781,9 +821,19 @@ function App() {
       }
     }
     void refreshPublicTickets()
-    const timer = window.setInterval(() => { void refreshPublicTickets() }, 25000)
-    return () => { stopped = true; window.clearInterval(timer) }
-  }, [sessionUserId, branchId, page])
+    const channel = supabase.channel('maintenance-live-' + branchId)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'maintenance_tickets', filter: 'branch_id=eq.' + branchId }, () => { void refreshPublicTickets() })
+      .subscribe()
+    const timer = window.setInterval(() => { void refreshPublicTickets() }, 12000)
+    const onFocus = () => { void refreshPublicTickets() }
+    window.addEventListener('focus', onFocus)
+    return () => {
+      stopped = true
+      window.clearInterval(timer)
+      window.removeEventListener('focus', onFocus)
+      void supabase.removeChannel(channel)
+    }
+  }, [sessionUserId, branchId])
 
   if (authLoading) return <LoadingScreen label="Checking your session..." />
   if (!supabaseConfigured) return <SetupScreen message="Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to continue." />
@@ -939,6 +989,13 @@ function App() {
         </header>
 
         <main className="p-3 lg:p-6" style={{ minHeight: 'calc(100dvh - 3.5rem - env(safe-area-inset-top, 0px))' }}>
+          {newTicketAlert && <div role="alert" className="no-print mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border-2 border-amber-400 bg-amber-50 p-4 shadow-lg">
+            <div><p className="font-bold text-amber-950">🔔 New Maintenance Complaint / नई शिकायत</p>
+              <p className="text-sm text-amber-900">Ticket {newTicketAlert.ticketNumber || newTicketAlert.id} · Room {data.rooms.find(room => room.id === newTicketAlert.roomId)?.number || '—'} · {newTicketAlert.title}</p>
+            </div>
+            <div className="flex gap-2"><button className="rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white" onClick={() => { setPage('Maintenance'); setTicketFilter('All'); setNewTicketAlert(null) }}>View Ticket</button><button aria-label="Dismiss ticket alert" className="rounded-md border px-3 py-2" onClick={() => setNewTicketAlert(null)}>Dismiss</button></div>
+          </div>}
+          {!ticketSoundEnabled && <button className="no-print mb-3 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium" onClick={() => { setTicketSoundEnabled(true); playTicketSound() }}>🔊 Enable maintenance alert sound</button>}
           {successMessage && <div className="mb-4 flex items-center justify-between gap-3 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700"><span>{successMessage}</span><button aria-label="Dismiss" onClick={() => setSuccessMessage('')}><X size={16} /></button></div>}
           {backendError && <div className="mb-4 flex items-center justify-between gap-3 rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700"><span>{backendError}</span><button aria-label="Dismiss error" onClick={() => setBackendError('')}><X size={16} /></button></div>}
           {page === 'Dashboard' && <Dashboard scoped={scoped} rentSummary={rentSummary} refreshRentSummary={refreshRentSummary} setModal={openModal} setPage={setPage} setTenantTab={setTenantTab} setTenantFilter={setTenantFilter} setRoomFloor={setRoomFloor} setFinanceTab={setFinanceTab} setPaymentFilter={setPaymentFilter} setTicketFilter={setTicketFilter} />}
