@@ -1,4 +1,4 @@
-const CACHE = 'pg95-shell-v10'
+const CACHE = 'pg95-shell-v11'
 const SHELL = ['/', '/icons/apple-touch-icon.png', '/icons/favicon-32.png', '/icons/icon-192.png', '/icons/icon-512.png', '/icons/icon-maskable-512.png', '/manifest.webmanifest']
 
 self.addEventListener('install', (event) => {
@@ -81,4 +81,34 @@ self.addEventListener('fetch', (event) => {
       ),
     )
   }
+})
+
+self.addEventListener('push', (event) => {
+  if (!event.data) return
+  let payload
+  try { payload = event.data.json() } catch { return }
+  const title = typeof payload.title === 'string' ? payload.title : 'PG 95 Maintenance'
+  const options = {
+    body: typeof payload.body === 'string' ? payload.body : 'New maintenance request',
+    icon: '/icons/icon-192.png',
+    badge: '/icons/favicon-32.png',
+    tag: typeof payload.ticketId === 'string' ? 'maintenance-' + payload.ticketId : 'maintenance',
+    data: { url: '/?maintenance=1', ticketId: payload.ticketId },
+  }
+  event.waitUntil(self.registration.showNotification(title, options))
+})
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close()
+  event.waitUntil((async () => {
+    const target = new URL(event.notification.data?.url || '/?maintenance=1', self.location.origin).href
+    const clientsList = await clients.matchAll({ type: 'window', includeUncontrolled: true })
+    for (const client of clientsList) {
+      if (new URL(client.url).origin === self.location.origin) {
+        await client.focus()
+        client.postMessage({ type: 'PG95_OPEN_MAINTENANCE' })
+        return
+      }
+    }
+    await clients.openWindow(target)
+  })())
 })
