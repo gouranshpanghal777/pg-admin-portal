@@ -51,7 +51,18 @@ export default function PushNotifications({ userId, branchIds }: Props) {
       const { data, error } = await supabase.functions.invoke('pg95-maintenance-push', {
         body: { mode: 'test' },
       })
-      if (error) throw new Error('Push test server failed: ' + error.message)
+      if (error) {
+        // FunctionsHttpError contains an actual HTTP Response in context.
+        // Surface the server's safe error message instead of a generic non-2xx.
+        const response = error.context
+        let detail = ''
+        if (response instanceof Response) {
+          const body = await response.clone().json().catch(() => null)
+          if (body && typeof body.error === 'string') detail = body.error.slice(0, 180)
+          if (!detail) detail = 'Server returned HTTP ' + response.status
+        }
+        throw new Error(detail || ('Push test request failed: ' + error.message))
+      }
       if (!data?.sent) {
         const errors = Array.isArray(data?.errors) ? data.errors.map((item: { status?: number; message?: string }) => item.status ? 'HTTP ' + item.status : (item.message || 'provider error')).join(', ') : ''
         throw new Error(data?.error || ('Push service rejected notification. ' + (errors || 'Check the phone subscription.')))
