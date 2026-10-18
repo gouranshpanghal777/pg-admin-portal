@@ -998,7 +998,7 @@ function App() {
         </header>
 
         <main className="p-3 lg:p-6" style={{ minHeight: 'calc(100dvh - 3.5rem - env(safe-area-inset-top, 0px))' }}>
-          {sessionUserId && branchId && <PushNotifications userId={sessionUserId} branchId={branchId} />}
+          {sessionUserId && branchId && <PushNotifications userId={sessionUserId} branchIds={visibleBranches.map(item => item.id)} />}
           {newTicketAlert && <div role="alert" className="no-print mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border-2 border-amber-400 bg-amber-50 p-4 shadow-lg">
             <div><p className="font-bold text-amber-950">🔔 New Maintenance Complaint / नई शिकायत</p>
               <p className="text-sm text-amber-900">Ticket {newTicketAlert.ticketNumber || newTicketAlert.id} · Room {data.rooms.find(room => room.id === newTicketAlert.roomId)?.number || '—'} · {newTicketAlert.title}</p>
