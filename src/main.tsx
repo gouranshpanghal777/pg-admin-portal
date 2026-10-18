@@ -8,20 +8,20 @@ import { registerPwa } from './lib/pwaUpdate'
 import { registerDayRollover } from './lib/dayRollover'
 
 const path = window.location.pathname
-const maintenanceMatch = path.match(/^\/maintenance\/request\/([a-f0-9]+)$/)
-const tokenFromUrl = maintenanceMatch?.[1]
+// All maintenance QR routes must show the public page, never the admin login.
+const publicMaintenanceRoute = /^\/maintenance\/request(?:\/|$)/i.test(path)
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    {tokenFromUrl ? <PublicMaintenanceRequest /> : <App />}
-    <UpdateNotice />
+    {publicMaintenanceRoute ? <PublicMaintenanceRequest /> : <App />}
+    {!publicMaintenanceRoute && <UpdateNotice />}
   </StrictMode>,
 )
 
-if (!tokenFromUrl) registerDayRollover()
+if (!publicMaintenanceRoute) registerDayRollover()
 
 if ('serviceWorker' in navigator) {
-  if (import.meta.env.PROD) {
+  if (import.meta.env.PROD && !publicMaintenanceRoute) {
     window.addEventListener('load', registerPwa)
   } else {
     void navigator.serviceWorker.getRegistrations().then((registrations) =>
