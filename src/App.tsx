@@ -68,6 +68,7 @@ import {
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable/es'
 import QRCode from 'qrcode'
+import { createMaintenancePoster, downloadMaintenancePoster, printMaintenancePoster } from './features/maintenancePoster'
 
 export type Role = 'Admin' | 'Staff'
 type Page =
@@ -754,6 +755,35 @@ function App() {
       })
     closeModal()
   }
+
+  // Public QR tickets are inserted directly by the database, outside the admin's
+  // optimistic write queue. Refresh only tickets while viewing Maintenance.
+  useEffect(() => {
+    if (!sessionUserId || !branchId || page !== 'Maintenance') return
+    let stopped = false
+    let inFlight = false
+    const refreshPublicTickets = async () => {
+      if (inFlight) return
+      inFlight = true
+      try {
+        await persistenceQueue.current
+        const fresh = await refreshTables(['maintenance_tickets'], dataRef.current)
+        if (stopped) return
+        if (JSON.stringify(fresh.tickets) !== JSON.stringify(dataRef.current.tickets)) {
+          const updated = { ...dataRef.current, tickets: fresh.tickets }
+          dataRef.current = updated
+          setData(updated)
+        }
+      } catch (error) {
+        console.warn('Maintenance tickets could not be refreshed', error)
+      } finally {
+        inFlight = false
+      }
+    }
+    void refreshPublicTickets()
+    const timer = window.setInterval(() => { void refreshPublicTickets() }, 25000)
+    return () => { stopped = true; window.clearInterval(timer) }
+  }, [sessionUserId, branchId, page])
 
   if (authLoading) return <LoadingScreen label="Checking your session..." />
   if (!supabaseConfigured) return <SetupScreen message="Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to continue." />
@@ -2076,67 +2106,65 @@ function ConfirmModal({ title, message, confirmLabel = 'Confirm', onClose, onCon
 }
 
 function MaintenanceQRModal({ branch, onClose }: { branch: Branch; onClose: () => void }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
   const [qrDataUrl, setQrDataUrl] = useState('')
-  const qrUrl = `https://pg-admin-portal.vercel.app/maintenance/request/${branch.maintenanceToken}`
-  const branchName = branch.name
+  const [posterDataUrl, setPosterDataUrl] = useState('')
+  const [posterError, setPosterError] = useState('')
+  // The QR always points to the stable public production domain, even from a preview.
+  const qrUrl = `https://pg-admin-portal.vercel.app/maintenance/request/${branch.maintenanceToken || ''}`
+  const validToken = /^[a-f0-9]{32}$/i.test(branch.maintenanceToken || '')
 
   useEffect(() => {
-    if (!canvasRef.current || !branch.maintenanceToken) return
-    QRCode.toCanvas(canvasRef.current, qrUrl, { width: 280, margin: 2, color: { dark: '#0f172a', light: '#ffffff' } }, (error) => {
-      if (!error && canvasRef.current) {
-        setQrDataUrl(canvasRef.current.toDataURL('image/png'))
+    let cancelled = false
+    setQrDataUrl('')
+    setPosterDataUrl('')
+    setPosterError('')
+    if (!validToken) {
+      setPosterError('This branch does not have a valid QR token. Refresh branch data and try again.')
+      return
+    }
+    const generate = async () => {
+      try {
+        const image = await QRCode.toDataURL(qrUrl, {
+          width: 1200, margin: 4, errorCorrectionLevel: 'M',
+          color: { dark: '#12223e', light: '#ffffff' },
+        })
+        if (cancelled) return
+        setQrDataUrl(image)
+        const poster = await createMaintenancePoster(image, branch.name, qrUrl)
+        if (cancelled) return
+        setPosterDataUrl(poster)
+      } catch {
+        if (!cancelled) setPosterError('Unable to generate poster on this device. Please try again.')
       }
-    })
-  }, [branch.maintenanceToken, qrUrl])
+    }
+    void generate()
+    return () => { cancelled = true }
+  }, [branch.name, validToken, qrUrl])
 
-  const handleDownload = useCallback(() => {
-    if (!qrDataUrl) return
-    const a = document.createElement('a')
-    a.href = qrDataUrl
-    a.download = `PG95-${branchName.replace(/\s+/g, '-')}-Maintenance-QR.png`
-    a.rel = 'noopener'
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-  }, [qrDataUrl, branchName])
+  const downloadPoster = () => {
+    if (posterDataUrl) downloadMaintenancePoster(posterDataUrl, branch.name)
+  }
+  const printPoster = () => {
+    if (!posterDataUrl) return
+    try { printMaintenancePoster(posterDataUrl) }
+    catch (failure) { setPosterError(failure instanceof Error ? failure.message : 'Unable to print poster') }
+  }
 
-  const handlePrint = useCallback(() => {
-    if (!qrDataUrl) return
-    const win = window.open('', '_blank')
-    if (!win) return
-    win.document.write(`<!doctype html><html><head><title>PG 95 - ${branchName} Maintenance QR</title><style>
-      body { margin: 0; padding: 24px; font-family: system-ui, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; background: #f7f3ec; }
-      .poster { text-align: center; max-width: 420px; }
-      .logo { width: 56px; height: 56px; border-radius: 8px; background: #2563eb; color: #fff; display: inline-flex; align-items: center; justify-content: center; font-weight: 900; font-size: 24px; }
-      h1 { font-size: 24px; margin: 16px 0 4px; color: #0f172a; }
-      .branch { font-size: 16px; color: #64748b; margin-bottom: 24px; }
-      img { width: 320px; height: 320px; border-radius: 12px; background: #fff; padding: 16px; box-shadow: 0 4px 24px rgba(0,0,0,0.1); }
-      .instruction { margin-top: 20px; font-size: 16px; font-weight: 600; color: #0f172a; }
-      .footer { margin-top: 8px; font-size: 12px; color: #94a3b8; }
-      @media print { body { padding: 0; } .poster { margin: 0 auto; } img { box-shadow: none; } }
-    </style></head><body><div class="poster"><div class="logo">95</div><h1>PG 95</h1><div class="branch">${branchName}</div><img src="${qrDataUrl}" alt="Maintenance QR" /><div class="instruction">Scan to Raise a Maintenance Request</div><div class="footer">pg-admin-portal.vercel.app</div></div><script>window.onload=()=>{window.print()}</script></body></html>`)
-    win.document.close()
-  }, [qrDataUrl, branchName])
-
-  return <Modal title="Branch Maintenance QR" onClose={onClose}>
-    <div className="grid gap-5">
-      <div className="text-center">
-        <div className="mx-auto grid h-12 w-12 place-items-center rounded-md bg-blue-600 font-black text-white text-lg">95</div>
-        <h2 className="mt-3 text-lg font-bold text-slate-900">PG 95</h2>
-        <p className="text-sm text-slate-500">{branchName}</p>
+  return <Modal title="Maintenance QR · A4 Complaint Poster" onClose={onClose}>
+    <div className="grid gap-4">
+      <p className="text-center text-sm text-slate-600">Print and place this bilingual poster at the branch. Tenants can scan without logging in.</p>
+      {posterError && <p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-700">{posterError}</p>}
+      <div className="flex max-h-96 justify-center overflow-y-auto rounded-lg border bg-slate-100 p-3">
+        {posterDataUrl ? <img src={posterDataUrl} alt={`PG95 ${branch.name} bilingual Hindi English maintenance poster with QR`} className="h-auto w-64 self-start shadow-lg" /> :
+          <div className="flex min-h-44 items-center justify-center text-sm text-slate-500">{posterError ? 'Poster preview unavailable' : 'Generating A4 poster…'}</div>}
       </div>
-      <div className="flex justify-center">
-        <div className="rounded-xl bg-white p-3 shadow-md">
-          <canvas ref={canvasRef} className="h-56 w-56" />
-        </div>
+      <p className="text-center text-xs text-slate-600">समस्या / शिकायत दर्ज करें · SCAN TO RAISE A COMPLAINT</p>
+      <div className="flex flex-wrap justify-center gap-2">
+        <Button tone="blue" disabled={!posterDataUrl} onClick={downloadPoster}><Download size={16} /> Download A4 Poster</Button>
+        <Button tone="soft" disabled={!posterDataUrl} onClick={printPoster}><Printer size={16} /> Print A4 Poster</Button>
       </div>
-      <p className="text-center text-sm text-slate-500">Scan to Raise a Maintenance Request</p>
-      <div className="flex justify-center gap-3">
-        <Button tone="blue" onClick={handleDownload} disabled={!qrDataUrl}><Download size={16} /> Download QR</Button>
-        <Button tone="soft" onClick={handlePrint} disabled={!qrDataUrl}><Printer size={16} /> Print Poster</Button>
-      </div>
-      <p className="text-center text-xs text-slate-400">Print this poster on A4 paper and display inside the PG branch.</p>
+      <p className="text-center text-xs text-slate-500">The download includes Hindi + English headings, QR code and the 24–48 hour target. Print at A4 portrait, 100% scale.</p>
+      {qrDataUrl && <a className="break-all text-center text-xs font-semibold text-blue-700 underline" href={qrUrl} target="_blank" rel="noopener noreferrer">Test QR link: {qrUrl}</a>}
     </div>
   </Modal>
 }
