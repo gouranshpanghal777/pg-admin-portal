@@ -6,15 +6,20 @@ function toBytes(value: string): Uint8Array<ArrayBuffer> {
   const padded = value.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - value.length % 4) % 4)
   return Uint8Array.from(atob(padded), ch => ch.charCodeAt(0))
 }
-type Props = { userId: string; branchId: string }
-export default function PushNotifications({ userId, branchId }: Props) {
+type Props = { userId: string; branchIds: string[] }
+export default function PushNotifications({ userId, branchIds }: Props) {
   const [status, setStatus] = useState('')
   const [enabled, setEnabled] = useState(false)
   const [busy, setBusy] = useState(false)
   useEffect(() => {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) return
-    void navigator.serviceWorker.ready.then(r => r.pushManager.getSubscription()).then(s => setEnabled(Boolean(s))).catch(() => {})
-  }, [])
+    void navigator.serviceWorker.ready.then(r => r.pushManager.getSubscription()).then(async subscription => {
+      if (!subscription) { setEnabled(false); return }
+      const { data, error } = await supabase.from('maintenance_push_subscriptions')
+        .select('branch_id').eq('endpoint', subscription.endpoint).eq('user_id', userId)
+      if (!error) setEnabled(branchIds.length > 0 && branchIds.every(id => data?.some(row => row.branch_id === id)))
+    }).catch(() => {})
+  }, [userId, branchIds.join(',')])
   const supported = typeof window !== 'undefined' && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window
   async function enable() {
     setBusy(true); setStatus('')
@@ -27,11 +32,11 @@ export default function PushNotifications({ userId, branchId }: Props) {
       if (!subscription) subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: toBytes(VAPID_PUBLIC_KEY) })
       const json = subscription.toJSON()
       if (!json.endpoint || !json.keys?.p256dh || !json.keys.auth) throw new Error('Incomplete push subscription')
-      const { error } = await supabase.from('maintenance_push_subscriptions').upsert({
-        endpoint: json.endpoint, user_id: userId, branch_id: branchId,
-        p256dh: json.keys.p256dh, auth_secret: json.keys.auth,
+      const { error } = await supabase.from('maintenance_push_subscriptions').upsert(branchIds.map(id => ({
+        endpoint: json.endpoint, user_id: userId, branch_id: id,
+        p256dh: json.keys!.p256dh!, auth_secret: json.keys!.auth!,
         updated_at: new Date().toISOString(),
-      }, { onConflict: 'endpoint' })
+      })), { onConflict: 'endpoint,branch_id' })
       if (error) throw error
       setEnabled(true); setStatus('Notifications enabled on this phone / फोन पर नोटिफिकेशन चालू हैं')
     } catch(e) { setStatus(e instanceof Error ? e.message : 'Could not enable notifications') }
