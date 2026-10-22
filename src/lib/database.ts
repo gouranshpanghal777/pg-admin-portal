@@ -234,7 +234,7 @@ const databaseError = (operation: string, error: { message?: string; code?: stri
   return new Error(friendlyDbError(error))
 }
 
-export async function recordSplitPayment(input: { requestId: string; tenantId: string; branchId: string; rentAmount: number; rentDiscountAmount?: number; securityAmount: number; electricityAmount: number; electricityAction?: string; otherAmount: number; paymentDate: string; rentPeriod?: string; paymentMode: string; description: string }) {
+export async function recordSplitPayment(input: { requestId: string; tenantId: string; branchId: string; rentAmount: number; rentDiscountAmount?: number; securityAmount: number; securityAdjustmentAmount?: number; securityAdjustmentHead?: 'rent' | 'electricity' | 'other'; electricityAmount: number; electricityAction?: string; otherAmount: number; paymentDate: string; rentPeriod?: string; paymentMode: string; description: string }) {
   const payload = {
     p_request_id: input.requestId, p_tenant_id: input.tenantId, p_branch_id: input.branchId,
     p_rent_amount: input.rentAmount, p_security_amount: input.securityAmount,
@@ -243,13 +243,18 @@ export async function recordSplitPayment(input: { requestId: string; tenantId: s
     p_payment_mode: input.paymentMode, p_description: input.description || null,
     p_electricity_action: input.electricityAction || 'auto',
     p_rent_discount_amount: input.rentDiscountAmount || 0,
+    ...(input.securityAdjustmentAmount && input.securityAdjustmentAmount > 0 ? {
+      p_security_adjustment_amount: input.securityAdjustmentAmount,
+      p_security_adjustment_head: input.securityAdjustmentHead || 'rent',
+    } : {}),
   }
-  let response = await supabase.rpc('record_split_payment_v5', payload)
+  const rpcName = (input.securityAdjustmentAmount || 0) > 0 ? 'record_split_payment_v6' : 'record_split_payment_v5'
+  let response = await supabase.rpc(rpcName, payload)
   for (let attempt = 2; response.error && isTransientNetworkError(response.error) && attempt <= 3; attempt += 1) {
     await new Promise((resolve) => window.setTimeout(resolve, 400 * (attempt - 1)))
-    response = await supabase.rpc('record_split_payment_v5', payload)
+    response = await supabase.rpc(rpcName, payload)
   }
-  if (response.error) throw databaseError('record_split_payment_v5 RPC', response.error)
+  if (response.error) throw databaseError(`${rpcName} RPC`, response.error)
   return response.data
 }
 
