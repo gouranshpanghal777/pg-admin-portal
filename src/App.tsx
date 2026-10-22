@@ -1873,7 +1873,7 @@ function PaymentModal({ userId, branchId, tenants, payments, obligations, advanc
     if (!draft.value.attempted && securityAmount > 0 && !isFirstTimeSecurity && securityAmount > securityBalance) { setError(`Security amount (${money(securityAmount)}) exceeds remaining balance of ${money(securityBalance)}.`); return }
     savingRef.current = true; setSaving(true); setError('')
     try {
-      const rentPeriod = draft.value.attempted ? draft.value.rentPeriod : rentState?.period
+      const rentPeriod = draft.value.attempted ? draft.value.rentPeriod : (securityAdjustmentAmount > 0 && (rentState?.period || '') > paymentDate.slice(0, 7) ? paymentDate.slice(0, 7) : rentState?.period)
       draft.patch({ attempted: true, rentPeriod })
       await onSubmit({ requestId, tenantId, rentAmount, rentDiscountAmount, securityAmount, securityAdjustmentAmount, securityAdjustmentHead, electricityAmount, electricityAction, otherAmount, paymentDate, rentPeriod, paymentMode, description: draft.value.description })
       draft.clear()
