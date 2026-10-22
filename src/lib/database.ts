@@ -254,8 +254,27 @@ export async function recordSplitPayment(input: { requestId: string; tenantId: s
     await new Promise((resolve) => window.setTimeout(resolve, 400 * (attempt - 1)))
     response = await supabase.rpc(rpcName, payload)
   }
-  if (response.error) throw databaseError(`${rpcName} RPC`, response.error)
+  if (response.error) {
+    const rejected = databaseError(`${rpcName} RPC`, response.error)
+    // A definitive database error rolls back the entire RPC transaction.
+    // Network timeouts have an unknown outcome and must keep the locked retry draft.
+    if (response.error.code && !isTransientNetworkError(response.error)) {
+      Object.assign(rejected, { confirmedRejected: true })
+    }
+    throw rejected
+  }
   return response.data
+}
+
+export async function getPaymentSubmissionStatus(requestId: string, tenantId: string): Promise<'saved' | 'pending' | 'not_found'> {
+  const { data, error } = await supabase.rpc('get_payment_submission_status', {
+    p_request_id: requestId, p_tenant_id: tenantId,
+  })
+  if (error) throw databaseError('check payment submission status', error)
+  if (data !== 'saved' && data !== 'pending' && data !== 'not_found') {
+    throw new Error('Unable to confirm the payment status. Keep the saved draft and retry the status check.')
+  }
+  return data
 }
 
 export type LedgerChange = { id: number; label: string; at: string; state: 'applied' | 'undone' | 'superseded'; actor: string; can_undo: boolean; can_redo: boolean; payment_total_before: number; payment_total_after: number }
